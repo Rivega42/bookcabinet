@@ -29,7 +29,7 @@ sudo bash deploy/install.sh
 sudo reboot
 ```
 
-Подробно — см. [QUICKSTART.md](QUICKSTART.md).
+Подробно — см. [docs/QUICKSTART.md](docs/QUICKSTART.md).
 
 ## Архитектура
 
@@ -40,7 +40,8 @@ sudo reboot
 | Файл | Назначение |
 |------|-----------|
 | [CLAUDE.md](CLAUDE.md) | Канонический project context для AI и разработчиков |
-| [QUICKSTART.md](QUICKSTART.md) | Быстрый старт и базовые команды |
+| [docs/QUICKSTART.md](docs/QUICKSTART.md) | Быстрый старт и базовые команды |
+| [docs/STATE.md](docs/STATE.md) | Состояние проекта: что работает / не доделано / решения |
 | [docs/API.md](docs/API.md) | REST/WebSocket API |
 | [docs/HARDWARE.md](docs/HARDWARE.md) | GPIO карта, железо |
 | [docs/DISASTER_RECOVERY.md](docs/DISASTER_RECOVERY.md) | Аварийные процедуры |
