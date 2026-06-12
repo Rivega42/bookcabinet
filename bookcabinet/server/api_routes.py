@@ -35,6 +35,21 @@ from ..mechanics.calibration import AutoCalibrator
 from ..irbis.service import library_service
 
 
+# Один механизм — одна операция: повторный клик «выдать» не должен
+# запускать второй механический цикл параллельно первому.
+_mech_lock = asyncio.Lock()
+
+
+def with_mech_lock(handler):
+    async def wrapped(request):
+        if _mech_lock.locked():
+            return json_response(
+                {'success': False, 'error': 'Шкаф занят: выполняется другая операция'}, 409)
+        async with _mech_lock:
+            return await handler(request)
+    return wrapped
+
+
 def _check_irbis_connected() -> bool:
     """Проверка реального подключения к ИРБИС (TCP или mock)"""
     if IRBIS.get('mock', True):
@@ -1558,12 +1573,12 @@ def setup_routes(app: web.Application):
     app.router.add_post('/api/auth/card', post_auth_card)
     app.router.add_post('/api/auth/simulate', post_simulate_card)
     
-    # Book Operations
-    app.router.add_post('/api/issue', post_issue)
-    app.router.add_post('/api/return', post_return)
+    # Book Operations (механические — под замком от параллельного запуска)
+    app.router.add_post('/api/issue', with_mech_lock(post_issue))
+    app.router.add_post('/api/return', with_mech_lock(post_return))
     # Киоск-алиасы (паритет с Express)
-    app.router.add_post('/api/book/issue', post_book_issue)
-    app.router.add_post('/api/book/return', post_book_return)
+    app.router.add_post('/api/book/issue', with_mech_lock(post_book_issue))
+    app.router.add_post('/api/book/return', with_mech_lock(post_book_return))
     app.router.add_get('/api/books', get_books)
     app.router.add_get('/api/users', get_users)
     app.router.add_get('/api/rfid-readers', get_rfid_readers)
@@ -1589,10 +1604,10 @@ def setup_routes(app: web.Application):
     app.router.add_get('/api/calibration/blocked-cells', get_blocked_cells)
     app.router.add_post('/api/calibration/blocked-cells', post_blocked_cells)
     app.router.add_post('/api/calibration/quick-test', post_quick_test)
-    app.router.add_post('/api/load-book', post_load_book)
-    app.router.add_post('/api/extract', post_extract)
-    app.router.add_post('/api/extract-all', post_extract_all)
-    app.router.add_post('/api/run-inventory', post_inventory)
+    app.router.add_post('/api/load-book', with_mech_lock(post_load_book))
+    app.router.add_post('/api/extract', with_mech_lock(post_extract))
+    app.router.add_post('/api/extract-all', with_mech_lock(post_extract_all))
+    app.router.add_post('/api/run-inventory', with_mech_lock(post_inventory))
     
     # Mechanics
     app.router.add_post('/api/init', post_init)

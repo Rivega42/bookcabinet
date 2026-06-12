@@ -26,9 +26,17 @@ jobs:
             grep 'error TS' /tmp/tsc.log | grep -v 'pcscService'
             exit 1
           fi
+      - name: Vitest
+        run: npm test
+      - name: Vite build
+        run: npm run build
 
-  python-syntax:
+  python-tests:
     runs-on: ubuntu-latest
+    env:
+      MOCK_MODE: 'true'
+      IRBIS_MOCK: 'true'
+      DATABASE_PATH: /tmp/ci_shelf_data.db
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -36,3 +44,7 @@ jobs:
           python-version: '3.11'
       - name: Syntax check
         run: find bookcabinet tools -name "*.py" -exec python -m py_compile {} +
+      - name: Install deps
+        run: pip install aiohttp alembic pyserial pytest
+      - name: Pytest (mock mode)
+        run: python -m pytest bookcabinet/tests/ -v
