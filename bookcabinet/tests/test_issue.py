@@ -59,7 +59,7 @@ class TestIssueBook(unittest.TestCase):
             'id': 1, 'row': 'FRONT', 'x': 0, 'y': 0, 'status': 'occupied',
         }
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             self.service.issue_book('BOOK001', 'USER001')
         )
         self.assertTrue(result['success'])
@@ -71,7 +71,7 @@ class TestIssueBook(unittest.TestCase):
         self.mock_db.get_book_by_rfid.return_value = None
         self.mock_irbis.get_book_info = AsyncMock(return_value=None)
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             self.service.issue_book('NONEXISTENT', 'USER001')
         )
         self.assertFalse(result['success'])
@@ -121,7 +121,7 @@ class TestReturnBook(unittest.TestCase):
             'id': 5, 'row': 'BACK', 'x': 1, 'y': 3, 'status': 'empty',
         }
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             self.service.return_book('BOOK001')
         )
         self.assertTrue(result['success'])
