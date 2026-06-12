@@ -59,5 +59,17 @@ export default defineConfig({
       strict: true,
       deny: ["**/.*"],
     },
+    // Дев-режим против python-бэкенда: `vite` (порт 5173) проксирует
+    // API и WebSocket на aiohttp (порт из VITE_API_TARGET или 5000).
+    proxy: {
+      "/api": {
+        target: process.env.VITE_API_TARGET || "http://localhost:5000",
+        changeOrigin: true,
+      },
+      "/ws": {
+        target: process.env.VITE_API_TARGET || "http://localhost:5000",
+        ws: true,
+      },
+    },
   },
 });

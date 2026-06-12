@@ -11,7 +11,7 @@ WORKDIR /app
 
 # Python-зависимости в venv (bookworm не даёт ставить в системный python)
 RUN python3 -m venv /opt/venv \
-    && /opt/venv/bin/pip install --no-cache-dir aiohttp alembic
+    && /opt/venv/bin/pip install --no-cache-dir aiohttp alembic pyserial
 
 # Node-зависимости — отдельным слоем для кеша
 COPY package.json package-lock.json ./

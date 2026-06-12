@@ -20,5 +20,29 @@ services:
       - bookcabinet-data:/data
     restart: unless-stopped
 
+  # Целевой python-бэкенд (решение 2026-06-12): aiohttp отдаёт и API, и статику.
+  # Порт 5001. Сборка клиента — при старте контейнера (~1 мин).
+  bookcabinet-aiohttp:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: sh -c "npm run build && /opt/venv/bin/python -m bookcabinet.main"
+    ports:
+      - "5001:5000"
+    environment:
+      - DATABASE_PATH=/data/shelf_data.db
+    volumes:
+      - ./client:/app/client
+      - ./server:/app/server
+      - ./shared:/app/shared
+      - ./bookcabinet:/app/bookcabinet
+      - ./tools:/app/tools
+      - ./vite.config.ts:/app/vite.config.ts
+      - ./tailwind.config.ts:/app/tailwind.config.ts
+      - ./postcss.config.js:/app/postcss.config.js
+      - bookcabinet-aiohttp-data:/data
+    restart: unless-stopped
+
 volumes:
   bookcabinet-data:
+  bookcabinet-aiohttp-data:

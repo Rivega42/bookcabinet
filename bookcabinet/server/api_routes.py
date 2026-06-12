@@ -1,11 +1,10 @@
 """
 REST API Routes - полная версия (Python aiohttp server).
 
-NOTE: These routes serve the Python aiohttp backend. The primary entry
-point for the React frontend is the TypeScript Express server defined in
-server/routes.ts. Both servers expose similar endpoints; the TS server is
-authoritative for the web UI, while this Python server is used when
-running the cabinet directly on the Raspberry Pi without Node.
+Решение 2026-06-12: aiohttp — целевой бэкенд. Express (server/routes.ts)
+остаётся боевым на шкафу до проверенной миграции; киоск-алиасы
+(/api/book/issue, /api/book/return и др.) обеспечивают паритет с ним,
+чтобы фронтенд работал с обоими серверами без изменений.
 """
 from aiohttp import web
 import json
@@ -320,6 +319,123 @@ async def post_return(request):
     
     result = await return_service.return_book(book_rfid, ws_handler.send_progress)
     return json_response(result)
+
+
+# ============ КИОСК: паритет с Express-клиентом ============
+# Киоск (client/src/components/kiosk/*) ждёт прогресс в шкале «механических
+# шагов» (выдача 1–14, возврат 1–13) и события operation_started/completed/
+# failed. Транслируем события mechanics/algorithms в эту шкалу.
+
+def _camelize_row(row: dict) -> dict:
+    """Дублирует snake_case-поля camelCase-алиасами для TS-клиента."""
+    aliases = {
+        'cell_id': 'cellId', 'reserved_by': 'reservedForRfid',
+        'issued_to': 'issuedToRfid', 'issued_at': 'issuedAt',
+        'due_date': 'dueDate', 'book_rfid': 'bookRfid',
+        'book_title': 'bookTitle', 'reserved_for': 'reservedFor',
+        'needs_extraction': 'needsExtraction', 'card_type': 'cardType',
+    }
+    out = dict(row)
+    for snake, camel in aliases.items():
+        if snake in row:
+            out[camel] = row[snake]
+    return out
+
+
+class _KioskProgress:
+    """algorithms-события {operation: TAKE/GIVE, step, message} →
+    киоск-шкала {step: 1-14, label, status, wait_seconds}."""
+
+    _TAKE_MAP = {1: 1, 2: 2, 3: 4, 4: 4, 5: 4, 6: 4, 7: 4, 8: 4,
+                 9: 5, 10: 6, 11: 7, 12: 8, 13: 9}
+
+    def __init__(self, operation: str):
+        self.operation = operation
+        self._wait_sent = False
+
+    async def __call__(self, ev: dict):
+        op = ev.get('operation')
+        step = ev.get('step', 1)
+        label = ev.get('message', '')
+        if self.operation == 'issue':
+            if op == 'TAKE':
+                mech = self._TAKE_MAP.get(step, 8)
+                await ws_handler.send_progress({'step': mech, 'label': label, 'status': 'running'})
+                if mech == 9 and not self._wait_sent:
+                    # внешняя шторка открыта → таймер «заберите книгу»
+                    self._wait_sent = True
+                    wait_s = max(1, TIMEOUTS.get('user_wait', 30000) // 1000)
+                    await ws_handler.send_progress(
+                        {'step': 9, 'label': label, 'status': 'done', 'wait_seconds': wait_s})
+                    await ws_handler.send_progress(
+                        {'step': 10, 'label': 'Ожидание пользователя', 'status': 'running', 'wait_seconds': wait_s})
+            elif op == 'GIVE':
+                mech = min(11 + (step - 1) // 4, 14)  # 12 шагов GIVE → 11..14
+                await ws_handler.send_progress({'step': mech, 'label': label, 'status': 'running'})
+        else:  # return: в business-пути механика — только GIVE (размещение в ячейку)
+            if op == 'GIVE':
+                mech = 4 + max(1, round(step * 8 / 12))  # 5..12
+                await ws_handler.send_progress({'step': mech, 'label': label, 'status': 'running'})
+
+
+async def post_book_issue(request):
+    """Алиас киоска: POST /api/book/issue {bookRfid|book_rfid, userRfid|reader_uid}."""
+    data = await request.json()
+    book_rfid = data.get('bookRfid') or data.get('book_rfid')
+    user_rfid = data.get('userRfid') or data.get('reader_uid')
+    if not book_rfid or not user_rfid:
+        return json_response({'success': False, 'error': 'bookRfid и userRfid обязательны'}, 400)
+
+    await ws_handler.broadcast({'type': 'operation_started',
+                                'data': {'operation': 'issue', 'bookRfid': book_rfid, 'userRfid': user_rfid}})
+    result = await issue_service.issue_book(book_rfid, user_rfid, _KioskProgress('issue'))
+    if result.get('success'):
+        await ws_handler.broadcast({'type': 'operation_completed',
+                                    'data': {'operation': 'issue', 'bookRfid': book_rfid}})
+    else:
+        await ws_handler.broadcast({'type': 'operation_failed',
+                                    'data': {'operation': 'issue', 'message': result.get('error', 'Issue failed')}})
+    return json_response(result)
+
+
+async def post_book_return(request):
+    """Алиас киоска: POST /api/book/return {bookRfid|book_rfid}."""
+    data = await request.json()
+    book_rfid = data.get('bookRfid') or data.get('book_rfid')
+    if not book_rfid:
+        return json_response({'success': False, 'error': 'bookRfid обязателен'}, 400)
+
+    await ws_handler.broadcast({'type': 'operation_started',
+                                'data': {'operation': 'return', 'bookRfid': book_rfid}})
+    result = await return_service.return_book(book_rfid, _KioskProgress('return'))
+    if result.get('success'):
+        await ws_handler.broadcast({'type': 'operation_completed',
+                                    'data': {'operation': 'return', 'bookRfid': book_rfid}})
+    else:
+        await ws_handler.broadcast({'type': 'operation_failed',
+                                    'data': {'operation': 'return', 'message': result.get('error', 'Return failed')}})
+    return json_response(result)
+
+
+async def get_books(request):
+    return json_response([_camelize_row(b) for b in db.get_all_books()])
+
+
+async def get_users(request):
+    return json_response([_camelize_row(u) for u in db.get_all_users()])
+
+
+async def get_rfid_readers(request):
+    """Список считывателей в форме, которую ждёт админка (массив)."""
+    status = unified_reader.get_status()
+    return json_response([
+        {'id': 'nfc', 'name': 'ACR1281U-C', 'type': 'NFC 13.56MHz',
+         'description': 'Читательские билеты', 'connected': status.get('nfc_connected', False)},
+        {'id': 'uhf_card', 'name': 'IQRFID-5102', 'type': 'UHF 900MHz',
+         'description': 'Карты ЕКП', 'connected': status.get('uhf_connected', False)},
+        {'id': 'book', 'name': 'RRU9816', 'type': 'UHF 900MHz',
+         'description': 'Метки книг (не подключён в опрос)', 'connected': False},
+    ])
 
 
 async def post_load_book(request):
@@ -1326,6 +1442,12 @@ def setup_routes(app: web.Application):
     # Book Operations
     app.router.add_post('/api/issue', post_issue)
     app.router.add_post('/api/return', post_return)
+    # Киоск-алиасы (паритет с Express)
+    app.router.add_post('/api/book/issue', post_book_issue)
+    app.router.add_post('/api/book/return', post_book_return)
+    app.router.add_get('/api/books', get_books)
+    app.router.add_get('/api/users', get_users)
+    app.router.add_get('/api/rfid-readers', get_rfid_readers)
     app.router.add_post('/api/load-book', post_load_book)
     app.router.add_post('/api/extract', post_extract)
     app.router.add_post('/api/extract-all', post_extract_all)

@@ -102,6 +102,28 @@ pigpiod
 - `PRAGMA user_version=2`: v2-код отказывается работать со старой схемой; **деплой на шкаф: бэкап → `alembic upgrade head`** (миграция `0002_schema_v2` переносит данные со сверкой связей, покрыта тестом)
 - Тесты: `bookcabinet/tests/test_database_v2.py` — 9 интеграционных на реальном SQLite (жизненный цикл, атомарность/откаты, инварианты схемы, миграция 0001→0002 через alembic)
 
-### Известный gap (для этапа 3)
+### ~~Известный gap~~ — закрыт (этап 3, 2026-06-12)
 
-`mechanics/algorithms` в MOCK_MODE не проходит `take_shelf` («Проверка лотка» — мок датчиков неполон), поэтому бизнес-путь `bridge issue/return` в моке падает на механике; UI ходит через `_mock_sequence` в bridge.py. При консолидации на aiohttp мок надо доделать на уровне algorithms/sensors.
+Причиной падения бизнес-пути в моке был не мок датчиков, а **боевой баг колбэков**:
+`algorithms._emit_progress` делал `await` на результате колбэка, а bridge передаёт
+синхронный — TypeError после первого же события (на Pi бизнес-путь через bridge
+падал так же; вероятно, поэтому прод ушёл на issue_sequence). Исправлено
+(`_call_cb` принимает sync и async). Полные циклы issue/return в моке проходят.
+
+## Этап 3 (web-aiohttp) — статус
+
+Сделано (ветка feature/web-aiohttp):
+- Паритет API с Express под фактические вызовы киоска: `/api/book/issue`,
+  `/api/book/return` (c WS-событиями operation_started/completed/failed и
+  прогрессом в «механической шкале» киоска — транслятор `_KioskProgress`),
+  `/api/books`, `/api/users`, `/api/rfid-readers`; camelCase-алиасы полей.
+- `web_server.py` отдаёт свежий vite-билд `dist/public` (фоллбек — старый static/).
+- Два стенда в docker-compose: 5000 Express (как на шкафу), 5001 aiohttp (целевой).
+- vite proxy `/api`+`/ws` для HMR-разработки против python-бэкенда.
+- E2E через aiohttp проверен: auth → issue → WS-прогресс 1–13 с таймером шторки → completed.
+
+Осталось:
+- Прогнать паритет по остальным экранам (админка, калибровка, teach) и перевести киоск на aiohttp как основной.
+- Распил kiosk.tsx (2373 строки) на экраны; убрать мёртвые страницы (/rfid, панели), неиспользуемые ui-компоненты и зависимости.
+- Снять Express с прода (после проверки на Pi): systemd-юнит на `python -m bookcabinet.main`, Node — в `_attic/`.
+- Auth/sessions на aiohttp (у Express был requireSession; в aiohttp проверки ролей частичные).

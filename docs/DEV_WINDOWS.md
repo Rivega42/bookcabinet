@@ -9,7 +9,14 @@
 docker compose -f docker-compose.dev.yml up --build -d
 ```
 
-Открыть **http://localhost:5000** (киоск) / **http://localhost:5000/admin** (админка).
+Поднимаются **два стенда** с одним и тем же UI:
+
+| Порт | Бэкенд | Что это |
+|---|---|---|
+| **http://localhost:5000** | Node Express + bridge | как сейчас на шкафу (боевой) |
+| **http://localhost:5001** | Python aiohttp | целевой бэкенд (решение 2026-06-12); выдача/возврат идут через настоящий business-слой и БД v2, механика в моке |
+
+Админка: `/admin` на обоих. На 5001 клиент собирается при старте контейнера (~1 мин).
 
 - Node + Python собраны в один образ (`Dockerfile.dev`), все мок-переменные уже выставлены.
 - Исходники `client/`, `server/`, `shared/`, `bookcabinet/`, `tools/` примонтированы:
@@ -24,8 +31,21 @@ docker compose -f docker-compose.dev.yml up --build -d
 ```powershell
 npm install
 py -3 -m venv .venv
-.venv\Scripts\python -m pip install aiohttp alembic pytest
+.venv\Scripts\python -m pip install aiohttp alembic pytest pyserial
 ```
+
+### Запуск aiohttp-стенда нативно
+
+```powershell
+npm run build   # собрать клиент в dist/public (aiohttp отдаёт его сам)
+$env:PYTHONIOENCODING='utf-8'; $env:MOCK_MODE='true'; $env:IRBIS_MOCK='true'
+$env:DATABASE_PATH="$PWD\.local-dev\shelf_data.db"; $env:PORT='5001'; $env:HOST='127.0.0.1'
+.venv\Scripts\python -m bookcabinet.main
+```
+
+Для живой правки клиента против python-бэкенда: `npx vite` (порт 5173, HMR) —
+vite проксирует `/api` и `/ws` на `VITE_API_TARGET` (по умолчанию http://localhost:5000;
+для aiohttp: `$env:VITE_API_TARGET='http://localhost:5001'`).
 
 ### Запуск
 

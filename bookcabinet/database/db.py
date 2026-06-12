@@ -287,6 +287,16 @@ class Database:
 
     # ── пользователи и книги ─────────────────────────────────────
 
+    def get_all_books(self) -> List[Dict]:
+        with self.get_connection() as conn:
+            rows = conn.execute('SELECT * FROM books ORDER BY title').fetchall()
+            return [dict(r) for r in rows]
+
+    def get_all_users(self) -> List[Dict]:
+        with self.get_connection() as conn:
+            rows = conn.execute('SELECT * FROM users ORDER BY name').fetchall()
+            return [dict(r) for r in rows]
+
     def get_user_by_rfid(self, rfid: str) -> Optional[Dict]:
         with self.get_connection() as conn:
             row = conn.execute('SELECT * FROM users WHERE rfid = ? AND active = 1', (rfid,)).fetchone()
