@@ -67,8 +67,15 @@ TRAY_BOUNDS = {
 
 
 import os
-MOCK_MODE = os.environ.get('MOCK_MODE', 'false').lower() == 'true'
-DEBUG = os.environ.get('DEBUG', 'true').lower() == 'true'
+
+
+def _env_bool(name: str, default: str = 'false') -> bool:
+    """'1'/'true'/'yes'/'on' (без учёта регистра) — истина."""
+    return os.environ.get(name, default).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+MOCK_MODE = _env_bool('MOCK_MODE')
+DEBUG = _env_bool('DEBUG', 'true')
 MOTOR_SPEEDS = {'xy': 4000, 'tray': 2000, 'acceleration': 8000}
 MOTOR_DELAYS = {'xy': 0.000125, 'tray': 0.00025}
 SERVO_ANGLES = {'lock1_open': 0, 'lock1_close': 95, 'lock2_open': 0, 'lock2_close': 95}
@@ -98,13 +105,13 @@ DATABASE_PATH = os.environ.get('DATABASE_PATH', '/home/admin42/bookcabinet/bookc
 LOG_FILE = os.environ.get('LOG_FILE', '/home/admin42/bookcabinet/logs/bookcabinet.log')
 
 TELEGRAM = {
-    'enabled': os.environ.get('TELEGRAM_ENABLED', 'false').lower() == 'true',
+    'enabled': _env_bool('TELEGRAM_ENABLED'),
     'bot_token': os.environ.get('TELEGRAM_BOT_TOKEN', ''  ),
     'chat_id': os.environ.get('TELEGRAM_CHAT_ID', '-1001' ),
 }
 
 IRBIS = {
-    'mock': os.environ.get('IRBIS_MOCK', 'false').lower() == 'true',
+    'mock': _env_bool('IRBIS_MOCK'),
     'host': os.environ.get('IRBIS_HOST', '172.29.67.70'),
     'port': int(os.environ.get('IRBIS_PORT', '6666')),
     'db': os.environ.get('IRBIS_DB', 'IBIS'),
