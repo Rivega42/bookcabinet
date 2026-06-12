@@ -1,9 +1,25 @@
 # Разработка на Windows-ноутбуке (мок-режим)
 
 Цель: тестировать экраны и логику (читатель / библиотекарь / админ) без шкафа и железа.
-Проверено 2026-06-12 на Windows 11, Node 22, Python 3.14.
+Проверено 2026-06-12 на Windows 11, Node 22, Python 3.14, Docker Desktop 27.
 
-## Установка (один раз)
+## Вариант 1 — Docker (рекомендуется)
+
+```powershell
+docker compose -f docker-compose.dev.yml up --build -d
+```
+
+Открыть **http://localhost:5000** (киоск) / **http://localhost:5000/admin** (админка).
+
+- Node + Python собраны в один образ (`Dockerfile.dev`), все мок-переменные уже выставлены.
+- Исходники `client/`, `server/`, `shared/`, `bookcabinet/`, `tools/` примонтированы:
+  правки клиента подхватываются на лету (vite HMR), правки сервера — `docker compose -f docker-compose.dev.yml restart`.
+- Сброс тестовых данных: `docker compose -f docker-compose.dev.yml down -v && docker compose -f docker-compose.dev.yml up -d`.
+- Логи: `docker compose -f docker-compose.dev.yml logs -f`.
+
+## Вариант 2 — нативно (npm + venv)
+
+### Установка (один раз)
 
 ```powershell
 npm install
@@ -11,7 +27,7 @@ py -3 -m venv .venv
 .venv\Scripts\python -m pip install aiohttp alembic pytest
 ```
 
-## Запуск
+### Запуск
 
 ```powershell
 $env:MOCK_MODE = 'true'

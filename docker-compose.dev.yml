@@ -1,0 +1,24 @@
+# Dev-стенд в мок-режиме: docker compose -f docker-compose.dev.yml up --build
+# UI: http://localhost:5000  (киоск), http://localhost:5000/admin (админка)
+services:
+  bookcabinet-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    ports:
+      - "5000:5000"
+    volumes:
+      # Исходники монтируются для живой правки (HMR клиента работает через vite middleware;
+      # серверный код требует перезапуска контейнера).
+      - ./client:/app/client
+      - ./server:/app/server
+      - ./shared:/app/shared
+      - ./bookcabinet:/app/bookcabinet
+      - ./tools:/app/tools
+      # SQLite живёт в томе; витрина Node (data/storage.json) — эфемерна,
+      # пересоздание контейнера = сброс тестовых данных.
+      - bookcabinet-data:/data
+    restart: unless-stopped
+
+volumes:
+  bookcabinet-data:
