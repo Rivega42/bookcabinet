@@ -66,8 +66,31 @@ async def cmd_status():
     output({'type': 'result', 'success': True, **state})
 
 
+_MOCK_SEQUENCE_STEPS = [
+    "Homing XY", "Moving to cell", "Opening inner shutter", "Extending tray back",
+    "Closing inner shutter", "Moving to window", "Opening inner shutter at window",
+    "Locking front, extending tray", "Opening outer shutter", "Waiting for user",
+    "Closing outer shutter", "Retracting tray", "Closing inner shutter", "Homing",
+]
+
+
+async def _mock_sequence(cell_address: str):
+    """MOCK_MODE: имитация механической последовательности (формат событий
+    совпадает с tools/book_sequences.py) — для разработки UI без железа."""
+    for i, label in enumerate(_MOCK_SEQUENCE_STEPS, 1):
+        extra = {'wait_seconds': 10} if i in (9, 10) else {}
+        output({'type': 'progress', 'step': i, 'label': label, 'status': 'running', **extra})
+        await asyncio.sleep(1.5 if i == 10 else 0.4)
+        output({'type': 'progress', 'step': i, 'label': label, 'status': 'done', **extra})
+    output({'type': 'result', 'success': True, 'mock': True, 'cell': cell_address})
+
+
 async def cmd_issue_sequence(cell_address: str):
     """Run the full mechanical issue sequence for a cell address (e.g. '1.1.5')."""
+    from bookcabinet.config import MOCK_MODE
+    if MOCK_MODE:
+        await _mock_sequence(cell_address)
+        return
     from book_sequences import BookSequenceRunner
 
     def on_progress(**event):
@@ -83,6 +106,10 @@ async def cmd_issue_sequence(cell_address: str):
 
 async def cmd_return_sequence(cell_address: str):
     """Run the full mechanical return sequence, placing book into cell_address."""
+    from bookcabinet.config import MOCK_MODE
+    if MOCK_MODE:
+        await _mock_sequence(cell_address)
+        return
     from book_sequences import BookSequenceRunner
 
     def on_progress(**event):

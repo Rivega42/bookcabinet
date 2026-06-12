@@ -29,7 +29,7 @@ sudo bash deploy/install.sh
 sudo reboot
 ```
 
-Подробно — см. [docs/QUICKSTART.md](docs/QUICKSTART.md).
+Подробно — см. [docs/QUICKSTART.md](docs/QUICKSTART.md). Windows-ноутбук без железа — [docs/DEV_WINDOWS.md](docs/DEV_WINDOWS.md).
 
 ## Архитектура
 
