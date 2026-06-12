@@ -187,6 +187,14 @@ async def on_startup(app):
     except Exception as e:
         logger.warning(f'IRBIS sync queue startup failed: {e}')
 
+    # Ретеншен журналов (SD-карта не бесконечная): system_logs 90 дн., operations 365 дн.
+    try:
+        cleaned = db.cleanup_old_logs()
+        if cleaned['system_logs_deleted'] or cleaned['operations_deleted']:
+            logger.info(f"Ретеншен логов: {cleaned}")
+    except Exception as e:
+        logger.warning(f'Ретеншен логов не выполнен: {e}')
+
     db.add_system_log('INFO', 'Система запущена', 'main')
 
     logger.info(f'Сервер запущен на http://{HOST}:{PORT}')

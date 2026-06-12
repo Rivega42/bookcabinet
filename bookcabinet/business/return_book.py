@@ -101,20 +101,10 @@ class ReturnService:
 
             # === UPDATE_DB ===
             self.state = ReturnState.UPDATE_DB
-
-            db.update_book(book['id'],
-                status='returned',
-                cell_id=cell['id'],
-                issued_to=None,
-                issued_at=None
-            )
-
-            db.update_cell(cell['id'],
-                status='occupied',
-                book_rfid=book_rfid,
-                book_title=book['title'],
-                needs_extraction=True
-            )
+            # Атомарно: книга → awaiting_extraction в ячейке + журнал (db v2)
+            duration = int((datetime.now() - start_time).total_seconds() * 1000)
+            db.return_book_tx(book['id'], cell['id'], cell=cell,
+                book_rfid=book_rfid, duration_ms=duration)
 
             # === CALL_IRBIS ===
             self.state = ReturnState.CALL_IRBIS
@@ -131,16 +121,6 @@ class ReturnService:
 
             # === DONE ===
             self.state = ReturnState.DONE
-
-            duration = int((datetime.now() - start_time).total_seconds() * 1000)
-            db.log_operation('RETURN',
-                cell_row=cell['row'],
-                cell_x=cell['x'],
-                cell_y=cell['y'],
-                book_rfid=book_rfid,
-                duration_ms=duration
-            )
-
             db.add_system_log('INFO', f"Возвращена книга: {book['title']}", 'return')
 
             return {

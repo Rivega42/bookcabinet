@@ -54,25 +54,10 @@ class LoadService:
         if not success:
             return {'success': False, 'error': 'Ошибка механики шкафа'}
         
-        db.update_book(book['id'],
-            status='in_cabinet',
-            cell_id=cell['id']
-        )
-        
-        db.update_cell(cell['id'],
-            status='occupied',
-            book_rfid=book_rfid,
-            book_title=book['title']
-        )
-        
+        # Атомарно: книга → in_cabinet в ячейке + журнал (db v2)
         duration = int((datetime.now() - start_time).total_seconds() * 1000)
-        db.log_operation('LOAD',
-            cell_row=cell['row'],
-            cell_x=cell['x'],
-            cell_y=cell['y'],
-            book_rfid=book_rfid,
-            duration_ms=duration
-        )
+        db.load_book_tx(book['id'], cell['id'], cell=cell,
+            book_rfid=book_rfid, duration_ms=duration)
         
         db.add_system_log('INFO', f"Загружена книга: {book['title']} в ячейку ({cell['row']}, {cell['x']}, {cell['y']})", 'load')
         

@@ -63,8 +63,11 @@ class TestIssueBook(unittest.TestCase):
             self.service.issue_book('BOOK001', 'USER001')
         )
         self.assertTrue(result['success'])
-        self.mock_db.update_book.assert_called_once()
-        self.mock_db.update_cell.assert_called_once()
+        # db v2: переход атомарный, одним вызовом issue_book_tx
+        self.mock_db.issue_book_tx.assert_called_once()
+        args, kwargs = self.mock_db.issue_book_tx.call_args
+        self.assertEqual(args[0], 'b1')
+        self.assertEqual(args[1], 'USER001')
 
     def test_issue_book_not_found(self):
         """Issuing a book that doesn't exist should fail gracefully."""
@@ -125,8 +128,11 @@ class TestReturnBook(unittest.TestCase):
             self.service.return_book('BOOK001')
         )
         self.assertTrue(result['success'])
-        self.mock_db.update_book.assert_called_once()
-        self.mock_db.update_cell.assert_called_once()
+        # db v2: переход атомарный, одним вызовом return_book_tx
+        self.mock_db.return_book_tx.assert_called_once()
+        args, kwargs = self.mock_db.return_book_tx.call_args
+        self.assertEqual(args[0], 'b1')
+        self.assertEqual(args[1], 5)
 
 
 if __name__ == '__main__':

@@ -91,11 +91,17 @@ pigpiod
 | `deploy/`, `.github/` | systemd + CI | 🟢 живые |
 | `.replit`, `replit.md` | Реплит-наследие | 🔴 история |
 
-## Схема БД (SQLite, живая)
+## Схема БД (SQLite, v2 — 2026-06-12, ветка feature/db-v2)
 
-- `cells`: id, row (FRONT/BACK), x, y, status (`empty`/`occupied`/`blocked`), book_rfid, book_title, reserved_for, needs_extraction, updated_at
-- `books`: rfid (uniq), title, author, isbn, status (`in_cabinet`/`reserved`/`issued`/`returned`), cell_id, reserved_by, issued_to, issued_at, due_date
-- `users`: rfid (uniq), name, role (`reader`/`librarian`/`admin`), card_type, active
-- `operations`: timestamp, operation (INIT/TAKE/GIVE/ISSUE/RETURN/LOAD/EXTRACT), cell, book_rfid, user_rfid, result, duration_ms
-- `system_logs`, `settings`
-- Alembic настроен (1 миграция `0001_initial_schema`), но схему по факту создаёт `db._init_database()`; мок-данные (4 пользователя, 5 книг) сеются при первом старте.
+- `books`: rfid (uniq), title, author, isbn, **status по физике** (`in_cabinet`/`issued`/`awaiting_extraction`/`extracted`, CHECK: статус ↔ наличие cell_id), cell_id (FK, **уникальный** — две книги в ячейке невозможны), reserved_by (резерв — отдельное поле, не статус), issued_to/issued_at/due_date
+- `cells`: только физика — row (FRONT/BACK), x, y, blocked. Состояние (`empty`/`occupied`/`blocked`, needs_extraction, book_rfid…) вычисляет представление **cells_view** — форма строк совместима с v1, читающий код не менялся
+- `users`, `operations` (+индекс по timestamp), `system_logs` (+индекс), `settings`
+- **Каждый переход физического мира — одна транзакция** вместе с журналом: `db.issue_book_tx / return_book_tx / load_book_tx / extract_book_tx`; FOREIGN KEY включены
+- Ретеншен: system_logs 90 дн., operations 365 дн. (`db.cleanup_old_logs()`, вызывается на старте aiohttp)
+- Мок-данные сеются **только при MOCK_MODE** (раньше тестовые карты, включая админскую ADMIN99, попадали и в боевую БД)
+- `PRAGMA user_version=2`: v2-код отказывается работать со старой схемой; **деплой на шкаф: бэкап → `alembic upgrade head`** (миграция `0002_schema_v2` переносит данные со сверкой связей, покрыта тестом)
+- Тесты: `bookcabinet/tests/test_database_v2.py` — 9 интеграционных на реальном SQLite (жизненный цикл, атомарность/откаты, инварианты схемы, миграция 0001→0002 через alembic)
+
+### Известный gap (для этапа 3)
+
+`mechanics/algorithms` в MOCK_MODE не проходит `take_shelf` («Проверка лотка» — мок датчиков неполон), поэтому бизнес-путь `bridge issue/return` в моке падает на механике; UI ходит через `_mock_sequence` в bridge.py. При консолидации на aiohttp мок надо доделать на уровне algorithms/sensors.
