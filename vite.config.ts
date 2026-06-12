@@ -39,9 +39,7 @@ export default defineConfig({
           "radix-ui": [
             "@radix-ui/react-dialog",
             "@radix-ui/react-toast",
-            "@radix-ui/react-dropdown-menu",
             "@radix-ui/react-tabs",
-            "@radix-ui/react-select",
             "@radix-ui/react-progress",
             "@radix-ui/react-tooltip",
             "@radix-ui/react-label",

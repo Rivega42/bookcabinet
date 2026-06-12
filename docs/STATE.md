@@ -122,8 +122,21 @@ pigpiod
 - vite proxy `/api`+`/ws` для HMR-разработки против python-бэкенда.
 - E2E через aiohttp проверен: auth → issue → WS-прогресс 1–13 с таймером шторки → completed.
 
+Сделано в части 2 (2026-06-12):
+- Паритет админ-экранов: `/api/calibration/wizard/*` (алиасы на /api/wizard/*),
+  blocked-cells/quick-test, `/api/auth/logout`, `/api/emergency-stop`,
+  `/api/shutter/close-all`, `/api/maintenance` (хранится в settings, отражается
+  в /api/status), `/api/test/tray`, `/api/test/servo`,
+  `/api/calibration/test-suite` и `/api/calibration/test/{name}` (честные прогоны
+  motors/tray/locks/shutters/sensors с длительностями). Всё проверено через
+  докер-стенд 5001 с авторизацией ADMIN99.
+- Чистка клиента: страница `/rfid` + 3 панели → `_attic/`; 33 из 47 ui-компонентов
+  (транзитивный анализ) → `_attic/`; 39 мёртвых зависимостей + drizzle-kit/db:push +
+  drizzle.config.ts убраны (~80 → 28 пакетов, −102 пакета в node_modules;
+  бандл: index 193→168 КБ, radix 115→97 КБ).
+
 Осталось:
-- Прогнать паритет по остальным экранам (админка, калибровка, teach) и перевести киоск на aiohttp как основной.
-- Распил kiosk.tsx (2373 строки) на экраны; убрать мёртвые страницы (/rfid, панели), неиспользуемые ui-компоненты и зависимости.
+- Распил kiosk.tsx (2373 строки) на экраны.
+- SSE `/api/rfid-test/{readerId}` (консоль RFID-теста в админке) — пока только на Express.
 - Снять Express с прода (после проверки на Pi): systemd-юнит на `python -m bookcabinet.main`, Node — в `_attic/`.
-- Auth/sessions на aiohttp (у Express был requireSession; в aiohttp проверки ролей частичные).
+- Auth/sessions: в aiohttp та же синглтон-модель, что в Express (current_user в auth_service); для одного киоска достаточно, но требует ревью на этапе безопасности.

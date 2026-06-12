@@ -6,7 +6,6 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import KioskPage from "@/pages/kiosk";
 import AdminPage from "@/pages/admin";
-import RfidDashboard from "@/pages/rfid-dashboard";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -14,7 +13,6 @@ function Router() {
     <Switch>
       <Route path="/" component={KioskPage} />
       <Route path="/admin" component={AdminPage} />
-      <Route path="/rfid" component={RfidDashboard} />
       <Route component={NotFound} />
     </Switch>
   );

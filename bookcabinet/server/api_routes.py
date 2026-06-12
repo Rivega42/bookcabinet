@@ -186,7 +186,7 @@ async def get_status(request):
         'shutters': state['shutters'],
         'irbisConnected': _check_irbis_connected(),
         'autonomousMode': IRBIS['mock'],
-        'maintenanceMode': False,
+        'maintenanceMode': db.get_setting('maintenance_mode', '0') == '1',
         'statistics': stats,
     })
 
@@ -423,6 +423,125 @@ async def get_books(request):
 
 async def get_users(request):
     return json_response([_camelize_row(u) for u in db.get_all_users()])
+
+
+async def post_auth_logout(request):
+    """Киоск шлёт logout при автозавершении сессии; сессии в aiohttp
+    клиентские, серверу достаточно подтвердить."""
+    return json_response({'success': True})
+
+
+async def post_emergency_stop(request):
+    """Алиас киоска для /api/stop."""
+    algorithms.stop()
+    await ws_handler.broadcast({'type': 'emergency_stop', 'data': {}})
+    return json_response({'success': True, 'message': 'Аварийная остановка'})
+
+
+async def post_shutter_close_all(request):
+    """Киоск закрывает обе шторки при автологауте."""
+    await shutters.close_shutter('outer')
+    await shutters.close_shutter('inner')
+    return json_response({'success': True})
+
+
+async def post_maintenance(request):
+    data = await request.json()
+    enabled = bool(data.get('enabled'))
+    db.set_setting('maintenance_mode', '1' if enabled else '0')
+    await ws_handler.broadcast({'type': 'maintenance', 'data': {'enabled': enabled}})
+    return json_response({'success': True, 'enabled': enabled})
+
+
+async def post_test_tray(request):
+    """Тест лотка: {command: extend|retract} — только админ."""
+    error = role_check('admin')
+    if error:
+        return error
+    data = await request.json()
+    command = data.get('command', 'retract')
+    ok = await (motors.extend_tray() if command == 'extend' else motors.retract_tray())
+    db.add_system_log('INFO', f'Тест лотка: {command}', 'diagnostics')
+    return json_response({'success': bool(ok), 'command': command})
+
+
+async def post_test_servo(request):
+    """Тест серво: {servo: front|back, command: open|close} — только админ."""
+    error = role_check('admin')
+    if error:
+        return error
+    data = await request.json()
+    lock = 'lock1' if data.get('servo', 'front') in ('front', 'lock1') else 'lock2'
+    command = data.get('command', 'open')
+    if command == 'open':
+        await servos.open_lock(lock)
+    else:
+        await servos.close_lock(lock)
+    db.add_system_log('INFO', f'Тест серво: {lock} {command}', 'diagnostics')
+    return json_response({'success': True, 'servo': lock, 'command': command})
+
+
+async def _run_calibration_test(name: str) -> dict:
+    """Один тест калибровочного набора. В MOCK_MODE проходит быстро,
+    на железе реально двигает механику (только админ, по согласованию)."""
+    t0 = datetime.now()
+    try:
+        if name == 'motors':
+            pos = motors.get_position()
+            ok = await motors.move_xy(pos['x'] + 100, pos['y'])
+            ok = ok and await motors.move_xy(pos['x'], pos['y'])
+            message = 'XY туда-обратно 100 шагов'
+        elif name == 'tray':
+            ok = await motors.extend_tray(500) and await motors.retract_tray(500)
+            message = 'Лоток туда-обратно 500 шагов'
+        elif name == 'locks':
+            await servos.open_lock('lock1'); await servos.close_lock('lock1')
+            await servos.open_lock('lock2'); await servos.close_lock('lock2')
+            ok, message = True, 'Оба замка открыть/закрыть'
+        elif name == 'shutters':
+            await shutters.open_shutter('inner'); await shutters.close_shutter('inner')
+            await shutters.open_shutter('outer'); await shutters.close_shutter('outer')
+            ok, message = True, 'Обе шторки открыть/закрыть'
+        elif name == 'sensors':
+            readings = sensors.read_all()
+            ok, message = isinstance(readings, dict), f'Датчики: {readings}'
+        else:
+            return {'test': name, 'status': 'fail', 'message': f'Неизвестный тест: {name}'}
+    except Exception as e:
+        ok, message = False, str(e)
+    duration = int((datetime.now() - t0).total_seconds() * 1000)
+    return {'test': name, 'status': 'pass' if ok else 'fail', 'message': message, 'duration': duration}
+
+
+CALIBRATION_TESTS = ['motors', 'tray', 'locks', 'shutters', 'sensors']
+
+
+async def post_calibration_test_suite(request):
+    """Прогон всех калибровочных тестов — только админ."""
+    error = role_check('admin')
+    if error:
+        return error
+    results = [await _run_calibration_test(n) for n in CALIBRATION_TESTS]
+    passed = sum(1 for r in results if r['status'] == 'pass')
+    return json_response({
+        'success': passed == len(results),
+        'results': results,
+        'summary': {'passed': passed, 'total': len(results)},
+    })
+
+
+async def post_calibration_test_single(request):
+    error = role_check('admin')
+    if error:
+        return error
+    name = request.match_info['name']
+    result = await _run_calibration_test(name)
+    return json_response({'success': result['status'] == 'pass', 'result': result})
+
+
+async def post_wizard_exit(request):
+    """Выход из мастера калибровки (клиентский сброс; серверу — подтвердить)."""
+    return json_response({'success': True})
 
 
 async def get_rfid_readers(request):
@@ -1448,6 +1567,28 @@ def setup_routes(app: web.Application):
     app.router.add_get('/api/books', get_books)
     app.router.add_get('/api/users', get_users)
     app.router.add_get('/api/rfid-readers', get_rfid_readers)
+    app.router.add_post('/api/auth/logout', post_auth_logout)
+    app.router.add_post('/api/emergency-stop', post_emergency_stop)
+    app.router.add_post('/api/shutter/close-all', post_shutter_close_all)
+    app.router.add_post('/api/maintenance', post_maintenance)
+    app.router.add_post('/api/test/tray', post_test_tray)
+    app.router.add_post('/api/test/servo', post_test_servo)
+    app.router.add_post('/api/calibration/test-suite', post_calibration_test_suite)
+    app.router.add_post('/api/calibration/test/{name}', post_calibration_test_single)
+    # Мастер калибровки: клиент зовёт /api/calibration/wizard/*, исторические
+    # маршруты /api/wizard/* остаются для совместимости
+    app.router.add_post('/api/calibration/wizard/kinematics/start', post_wizard_kinematics_start)
+    app.router.add_post('/api/calibration/wizard/kinematics/step', post_wizard_kinematics_step)
+    app.router.add_post('/api/calibration/wizard/points10/start', post_wizard_points10_start)
+    app.router.add_post('/api/calibration/wizard/points10/save', post_wizard_points10_save)
+    app.router.add_post('/api/calibration/wizard/move', post_wizard_move)
+    app.router.add_post('/api/calibration/wizard/grab/start', post_wizard_grab_start)
+    app.router.add_post('/api/calibration/wizard/grab/adjust', post_wizard_grab_adjust)
+    app.router.add_post('/api/calibration/wizard/grab/test', post_wizard_grab_test)
+    app.router.add_post('/api/calibration/wizard/exit', post_wizard_exit)
+    app.router.add_get('/api/calibration/blocked-cells', get_blocked_cells)
+    app.router.add_post('/api/calibration/blocked-cells', post_blocked_cells)
+    app.router.add_post('/api/calibration/quick-test', post_quick_test)
     app.router.add_post('/api/load-book', post_load_book)
     app.router.add_post('/api/extract', post_extract)
     app.router.add_post('/api/extract-all', post_extract_all)

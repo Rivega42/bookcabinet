@@ -40,7 +40,6 @@ def create_app() -> web.Application:
     app.router.add_get('/', index_handler)
     app.router.add_get('/admin', index_handler)
     app.router.add_get('/kiosk', index_handler)
-    app.router.add_get('/rfid', index_handler)
 
     return app
 

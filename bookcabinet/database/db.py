@@ -468,6 +468,20 @@ class Database:
                 'DELETE FROM operations WHERE timestamp < ?', (ops_cutoff,)).rowcount
         return {'system_logs_deleted': sys_deleted, 'operations_deleted': ops_deleted}
 
+    # ── настройки ────────────────────────────────────────────────
+
+    def get_setting(self, key: str, default: str = None) -> Optional[str]:
+        with self.get_connection() as conn:
+            row = conn.execute('SELECT value FROM settings WHERE key = ?', (key,)).fetchone()
+            return row['value'] if row else default
+
+    def set_setting(self, key: str, value: str):
+        with self.get_connection() as conn:
+            conn.execute('''
+                INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            ''', (key, value, datetime.now().isoformat()))
+
     # ── статистика ───────────────────────────────────────────────
 
     def get_statistics(self) -> Dict:

@@ -19,6 +19,10 @@
 | `tools/measure_bounds.py` | tools/ | эпоха RPi.GPIO (до pigpio) |
 | `bookcabinet/test_sensors.py` | bookcabinet/ | эпоха RPi.GPIO (до pigpio); актуален tools/diagnostics/test_sensors.py |
 | `bookcabinet/tools/` | bookcabinet/ | разошедшиеся дубли корневого tools/ (diff ≠ 0); прод использует корневой tools/ (workflows/_TOOLS_DIR) |
+| `client/pages/rfid-dashboard.tsx` | client/src/pages/ | страница /rfid эпохи RFIDIntegrator, в киоск-флоу не использовалась |
+| `client/components/{connection,log,tag-data}-panel.tsx` | client/src/components/ | панели страницы /rfid |
+| `client/ui/` (33 компонента) | client/src/components/ui/ | shadcn-компоненты, не используемые транзитивно (этап 3, 2026-06-12) |
+| `drizzle.config.ts` | корень | PostgreSQL/drizzle-kit не используются (БД — SQLite в Python) |
 
 ⚠️ Перед окончательным удалением чего-либо отсюда — сверить с RPi: по словам Романа,
 на устройстве есть рабочие скрипты механики, которых нет/которые новее, чем в репо.
