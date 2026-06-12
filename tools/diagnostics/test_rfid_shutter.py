@@ -9,7 +9,7 @@ import os
 import json
 from datetime import datetime
 
-sys.path.insert(0, '/home/admin42/bookcabinet')
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from bookcabinet.rfid.unified_card_reader import unified_reader
 from bookcabinet.hardware.shutters import shutters
