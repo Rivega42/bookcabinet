@@ -17,7 +17,10 @@ StandardError=journal
 # Environment
 Environment=NODE_ENV=production
 Environment=PORT=5000
-Environment=HOST=0.0.0.0
+# Киоск локальный (chromium на этом же Pi). Раньше HOST игнорировался кодом
+# и сервер слушал 127.0.0.1; после фикса index.ts значение действует —
+# 0.0.0.0 открыл бы API всей сети без авторизации (синглтон-сессия).
+Environment=HOST=127.0.0.1
 Environment=BOOKCABINET_ROOT=/home/admin42/bookcabinet
 Environment=PYTHON_BRIDGE_PATH=/home/admin42/bookcabinet/bookcabinet/bridge.py
 Environment=AUTH_DAEMON_PATH=/home/admin42/bookcabinet/bookcabinet/services/auth_shutter_daemon.py

@@ -35,6 +35,14 @@ from ..mechanics.calibration import AutoCalibrator
 from ..irbis.service import library_service
 
 
+async def _alert(message: str, component: str = 'operations'):
+    """Telegram-алёрт о сбое (no-op, если TELEGRAM_ENABLED не выставлен)."""
+    try:
+        await telegram.notify_error(message, component)
+    except Exception:
+        pass  # алёрт никогда не должен ронять операцию
+
+
 # Один механизм — одна операция: повторный клик «выдать» не должен
 # запускать второй механический цикл параллельно первому.
 _mech_lock = asyncio.Lock()
@@ -410,6 +418,7 @@ async def post_book_issue(request):
     else:
         await ws_handler.broadcast({'type': 'operation_failed',
                                     'data': {'operation': 'issue', 'message': result.get('error', 'Issue failed')}})
+        await _alert(f"Сбой выдачи {book_rfid}: {result.get('error', '?')}", 'issue')
     return json_response(result)
 
 
@@ -429,6 +438,7 @@ async def post_book_return(request):
     else:
         await ws_handler.broadcast({'type': 'operation_failed',
                                     'data': {'operation': 'return', 'message': result.get('error', 'Return failed')}})
+        await _alert(f"Сбой возврата {book_rfid}: {result.get('error', '?')}", 'return')
     return json_response(result)
 
 
@@ -450,6 +460,7 @@ async def post_emergency_stop(request):
     """Алиас киоска для /api/stop."""
     algorithms.stop()
     await ws_handler.broadcast({'type': 'emergency_stop', 'data': {}})
+    await _alert('Аварийная остановка (кнопка СТОП)', 'emergency')
     return json_response({'success': True, 'message': 'Аварийная остановка'})
 
 

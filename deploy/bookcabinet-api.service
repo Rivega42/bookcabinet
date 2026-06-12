@@ -1,0 +1,29 @@
+# BookCabinet — целевой python-бэкенд (aiohttp, решение 2026-06-12).
+#
+# ЗАМЕНЯЕТ bookcabinet-ui.service (Node Express) после проверки паритета
+# на шкафу. install.sh его НЕ устанавливает автоматически — переключение:
+#   sudo cp deploy/bookcabinet-api.service /etc/systemd/system/
+#   sudo systemctl disable --now bookcabinet-ui
+#   sudo systemctl daemon-reload && sudo systemctl enable --now bookcabinet-api
+# Перед этим: npm run build (aiohttp отдаёт dist/public) и deploy/migrate.sh.
+[Unit]
+Description=BookCabinet API (Python aiohttp)
+After=network.target pigpiod.service bookcabinet-calibration.service
+Wants=pigpiod.service
+
+[Service]
+Type=simple
+User=admin42
+WorkingDirectory=/home/admin42/bookcabinet
+ExecStart=/usr/bin/python3 -m bookcabinet.main
+Restart=always
+RestartSec=3
+# Киоск локальный: наружу не слушаем (авторизация — синглтон, см. docs/STATE.md)
+Environment=HOST=127.0.0.1
+Environment=PORT=5000
+Environment=MOCK_MODE=false
+Environment=PYTHONUNBUFFERED=1
+SupplementaryGroups=dialout gpio i2c spi plugdev
+
+[Install]
+WantedBy=multi-user.target

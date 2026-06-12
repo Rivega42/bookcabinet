@@ -40,13 +40,18 @@ cd "$PROJECT_DIR"
 su -c "npm install && npm run build" "$SERVICE_USER"
 echo -e "${GREEN}OK${NC}"
 
-# 2a. Применение миграций БД (Alembic)
-echo -e "${YELLOW}[2a/6] Миграции БД (alembic upgrade head)...${NC}"
-if su -c "cd '$PROJECT_DIR' && python3 -m alembic upgrade head" "$SERVICE_USER"; then
-    echo -e "${GREEN}OK${NC}"
-else
-    echo -e "${YELLOW}  ⚠ alembic upgrade не выполнен (пропускаем)${NC}"
+# 2a. Миграции БД — только с бэкапом (правило CLAUDE.md).
+# Ошибку молча глотать нельзя: схема v2 откажется стартовать поверх старой.
+echo -e "${YELLOW}[2a/6] Бэкап БД + миграции (alembic upgrade head)...${NC}"
+DB_PATH="$PROJECT_DIR/bookcabinet/data/shelf_data.db"
+if [ -f "$DB_PATH" ]; then
+    su -c "cd '$PROJECT_DIR' && python3 -c \"
+from bookcabinet.monitoring.backup import backup_manager
+print('Бэкап:', backup_manager.create_backup('pre-install'))
+\"" "$SERVICE_USER"
 fi
+su -c "cd '$PROJECT_DIR' && python3 -m alembic upgrade head" "$SERVICE_USER"
+echo -e "${GREEN}OK${NC}"
 
 # 3. Копирование systemd units
 echo -e "${YELLOW}[3/6] Установка systemd сервисов...${NC}"
