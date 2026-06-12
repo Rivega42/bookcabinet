@@ -135,8 +135,20 @@ pigpiod
   drizzle.config.ts убраны (~80 → 28 пакетов, −102 пакета в node_modules;
   бандл: index 193→168 КБ, radix 115→97 КБ).
 
+Сделано в части 3 (2026-06-12):
+- kiosk.tsx 2372 → 871 строка: 9 экранов в `components/kiosk/screens/*`;
+  admin.tsx 590 → ~110: вкладки в `components/admin/*`. Смоук puppeteer на живом стенде.
+- Замок параллельных операций (`with_mech_lock`): двойной клик «выдать» больше
+  не запускает второй механический цикл — 409 «Шкаф занят» (проверено).
+- CI гоняет pytest + vitest + build (раньше — только синтаксис).
+- Деплой-пакет для Pi: `deploy/migrate.sh` (бэкап → alembic → рестарт → проверка),
+  install.sh больше не мигрирует без бэкапа и не глотает ошибки,
+  `HOST=127.0.0.1` в юнитах (киоск локальный; 0.0.0.0 открывал бы API сети
+  с синглтон-авторизацией), подготовлен `deploy/bookcabinet-api.service`
+  (python-бэкенд, инструкция переключения в шапке юнита).
+- Telegram-алёрты на сбои выдачи/возврата и аварийный стоп (`_alert` в api_routes).
+
 Осталось:
-- Распил kiosk.tsx (2373 строки) на экраны.
 - SSE `/api/rfid-test/{readerId}` (консоль RFID-теста в админке) — пока только на Express.
-- Снять Express с прода (после проверки на Pi): systemd-юнит на `python -m bookcabinet.main`, Node — в `_attic/`.
-- Auth/sessions: в aiohttp та же синглтон-модель, что в Express (current_user в auth_service); для одного киоска достаточно, но требует ревью на этапе безопасности.
+- Снять Express с прода (после проверки на Pi): переключить юнит на bookcabinet-api.service, Node — в `_attic/`.
+- Auth/sessions: в aiohttp та же синглтон-модель, что в Express (current_user в auth_service); для локального киоска достаточно, но требует ревью на этапе безопасности.
