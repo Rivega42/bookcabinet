@@ -238,7 +238,14 @@ class StartupRecovery:
     """Checks hardware state on startup and recovers if needed.
 
     Called once during service startup to ensure the cabinet is in a
-    known-safe state: shutters closed, tray retracted, position homed.
+    known-safe state: shutters closed, carriage homed, tray sensor-homed.
+
+    Порядок важен (механика, Роман 2026-06-13): лоток хомится по датчику
+    ТОЛЬКО когда каретка в home (x=0,y=0). Поэтому:
+      1. шторки закрыть;
+      2. грубо втянуть лоток (слепо) — лишь чтобы освободить путь каретке;
+      3. хоминг XY → каретка в 0,0;
+      4. ТОЧНЫЙ sensor-хоминг лотка к концевику BACK (истинный ноль лотка).
     """
 
     async def check_and_recover(self) -> dict:
@@ -246,7 +253,7 @@ class StartupRecovery:
 
         Returns dict summarizing what was done.
         """
-        results = {'shutters': None, 'tray': None, 'homing': None}
+        results = {'shutters': None, 'tray': None, 'homing': None, 'tray_homing': None}
 
         try:
             from ..hardware.shutters import shutters
@@ -263,10 +270,11 @@ class StartupRecovery:
             from ..hardware.sensors import sensors
             from ..hardware.motors import motors
 
-            # Check tray — retract if extended
+            # Грубое (слепое) втягивание лотка — только чтобы освободить путь
+            # каретке. Истинный ноль лотка устанавливается ниже sensor-хомингом.
             if not sensors.is_tray_retracted():
                 await motors.retract_tray()
-                results['tray'] = 'retracted'
+                results['tray'] = 'retracted (coarse)'
             else:
                 results['tray'] = 'already_retracted'
         except Exception as e:
@@ -277,12 +285,28 @@ class StartupRecovery:
             from ..hardware.sensors import sensors
             from ..hardware.motors import motors
 
-            # Home if needed
+            # Хоминг каретки XY → x=0, y=0 (необходимо ДО хоминга лотка)
             result = await motors.home_with_sensors(sensors)
             results['homing'] = 'ok' if result else 'failed'
         except Exception as e:
             results['homing'] = f'error: {e}'
             db.add_system_log('ERROR', f'Startup recovery homing: {e}', 'watchdog')
+
+        try:
+            from ..hardware.sensors import sensors
+            from ..hardware.motors import motors
+
+            # Точный sensor-хоминг лотка к концевику BACK. Лоток можно хомить
+            # ТОЛЬКО при каретке в home (Роман 2026-06-13), поэтому строго после
+            # успешного хоминга XY. Раньше старт делал лишь слепой retract.
+            if results['homing'] == 'ok':
+                tray_ok = await motors.home_tray_with_sensor(sensors)
+                results['tray_homing'] = 'ok' if tray_ok else 'failed'
+            else:
+                results['tray_homing'] = 'skipped (XY homing not ok)'
+        except Exception as e:
+            results['tray_homing'] = f'error: {e}'
+            db.add_system_log('ERROR', f'Startup recovery tray homing: {e}', 'watchdog')
 
         db.add_system_log(
             'INFO',
