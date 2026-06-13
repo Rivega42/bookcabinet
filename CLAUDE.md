@@ -9,12 +9,12 @@
 RFID-идентификация (читательский билет NFC, карта ЕКП UHF, метки книг UHF), транспортный механизм
 (CoreXY-каретка + лоток забирает полку с книгой из ячейки и везёт к окну выдачи), интеграция с ИРБИС.
 
-Боевая цепочка на шкафу (systemd): `pigpiod → bookcabinet-calibration → bookcabinet-daemon + bookcabinet-ui (node dist/index.js, порт 5000) → chromium-kiosk`.
+Боевая цепочка на шкафу (systemd, выложено 2026-06-13): `pigpiod + pcscd-daemon → bookcabinet.service (python3 -m bookcabinet.main, aiohttp, порт 5000, HOST=127.0.0.1) → chromium-kiosk`.
 
-- **Боевой сервер — Node/Express** (`server/routes.ts` + WebSocket). Python вызывается субпроцессом: `python3 -m bookcabinet.bridge <cmd>` → `bookcabinet/business/*` (стейт-машины над БД) и `bookcabinet/workflows/*` (18/19-шаговые боевые сценарии) → скрипты `tools/*.py`.
-- Параллельно существует **полный Python aiohttp-сервер** `bookcabinet/main.py` — не задеплоен. **Решение 2026-06-12: целевой бэкенд — Python aiohttp**; Express остаётся боевым до проверенной миграции (план в docs/STATE.md).
+- **Боевой сервер — Python aiohttp** (`bookcabinet/main.py` → `server/web_server.py` + `server/api_routes.py` + WebSocket). Отдаёт API и фронт `dist/public`. Бизнес-логика — `business/*` (стейт-машины над БД v2, транзакционные переходы). `tools/*.py` — слой механики.
+- **Node/Express (`server/*.ts`) больше НЕ боевой** — мигрировали на aiohttp (проверено на железе). Express — кандидат в `_attic/`; `bridge.py`/`workflows/*` — наследие Node-пути.
 - Фронтенд: React в `client/`, сборка vite → `dist/public/`.
-- БД: SQLite `bookcabinet/data/shelf_data.db` (`bookcabinet/database/`). Drizzle/PostgreSQL-схема в `shared/schema.ts` НЕ используется.
+- БД: SQLite v2 `bookcabinet/data/shelf_data.db` (`bookcabinet/database/`, user_version=2, alembic-миграции). Drizzle/PostgreSQL-схема в `shared/schema.ts` НЕ используется.
 - Механика: канонический слой движения — `tools/corexy_motion_v2.py`; приложение ходит через `mechanics/algorithms.py` → `hardware/motors.py`. HOME = LEFT+BOTTOM, скорости хоминга 800/300 — живые истины, не менять.
 - RFID: `bookcabinet/rfid/unified_card_reader.py` (NFC ACR1281U-C + UHF IQRFID-5102). RRU9816 (метки книг) — драйвер есть, в опрос не подключён; **нужен в проде, подключить** (Роман, 2026-06-12). По словам Романа физически стоят 2 одинаковых считывателя + 1 другой — сверить с конфигом при доступе к RPi.
 - ⚠️ На RPi лежат рабочие скрипты управления механикой, которых нет (или которые новее) в репо — при доступе к шкафу найти и забрать в репозиторий, до этого считать репо-версии потенциально отстающими.
@@ -37,10 +37,14 @@ RFID-идентификация (читательский билет NFC, кар
 Дополнительно (выводы живых сессий на шкафу, подробности в docs/HARDWARE.md):
 
 - HOME = LEFT + BOTTOM. Не возвращать RIGHT_BOTTOM из старых скриптов.
-- Скорости хоминга FAST=800 / SLOW=300; 1500/400 рвали ремень, >3000 — клин. Не повышать.
+- Скорости хоминга XY FAST=800 / SLOW=300; 1500/400 рвали ремень, >3000 — клин. Не повышать.
 - Перед движением лотка пины 25 и 26 — в LOW.
-- Glitch-фильтры на концевиках не убирать; GPIO 20 шумит, нужен фильтр 5000 мкс.
+- Glitch-фильтры на концевиках не убирать; GPIO 20 шумит.
+- **Калибровка лотка — ТОЛЬКО как `tools/tray_calib_final.py`** (двухэтапно FAST 10000→backoff→SLOW 1500, FRONT→BACK→CENTER, `sensor_stable`=10 ПОДРЯД чтений; любой 0 сбрасывает). Простой одноэтапный хоминг до BACK ловит ложное срабатывание GPIO20 → ложный ноль (проверено на железе 2026-06-13: реализовано в `motors.home_tray_with_sensor`).
+- **Замки при старте — выставить в 500 мкс и УДЕРЖАТЬ** (`pigs s 12 500`, `pigs s 13 500` = `servos.open_lock`), иначе сервы дребезжат. Делать до хоминга («reset locks before homing»).
+- Лоток калибруется ТОЛЬКО при каретке в home (после хоминга XY).
 - Не «нормализовать» полярность/подтяжку датчиков по старым докам — проверять текущий скрипт.
+- ⚠️ Критичную механику валидировать на ЖЕЛЕЗЕ — мок не ловит ложные срабатывания датчиков.
 - Отладочные/калибровочные скрипты не удалять, пока их знания не перенесены в доки.
 
 ## Режимы
