@@ -499,6 +499,12 @@ class Algorithms:
         """Аварийная остановка"""
         self._stop_requested = True
         motors.stop()
+        # Безопасность: при аварии шторки не оставляем открытыми (рука/книга в окне).
+        # stop() синхронный — закрываем напрямую, без await.
+        try:
+            shutters.close_all_immediate()
+        except Exception:
+            pass
         self.state = 'stopped'
     
     def get_state(self) -> Dict[str, Any]:

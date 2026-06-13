@@ -37,6 +37,8 @@ logger = logging.getLogger('bookcabinet')
 
 # Фоновая задача для опроса карт
 _card_polling_task = None
+# Фоновая задача для опроса книжного ридера (метки книг в окне → авто-возврат)
+_book_polling_task = None
 
 
 async def on_card_detected(uid: str, source: str):
@@ -91,15 +93,73 @@ async def start_card_polling():
 def stop_card_polling():
     """Остановка опроса карт"""
     global _card_polling_task
-    
+
     unified_reader.stop()
     unified_reader.disconnect()
-    
+
     if _card_polling_task:
         _card_polling_task.cancel()
         _card_polling_task = None
-    
+
     logger.info('Опрос карт остановлен')
+
+
+async def on_book_detected(epc: str):
+    """
+    Callback при обнаружении метки книги в окне выдачи.
+    Шлёт событие book_read клиенту → киоск авто-стартует сценарий возврата.
+    """
+    title = None
+    try:
+        book = db.get_book_by_rfid(epc)
+        if book:
+            title = book.get('title')
+    except Exception:
+        pass
+
+    logger.info(f'Книга обнаружена: {epc} ({title or "?"})')
+    await ws_handler.broadcast({
+        'type': 'book_read',
+        'data': {'rfid': epc, 'title': title},
+    })
+
+
+async def start_book_polling():
+    """Опрос книжного ридера RRU9816 → событие book_read по WebSocket (авто-возврат).
+    Аддитивно: start_polling уже дедуплицирует метки (seen_tags), в моке поле пустое,
+    пока его не наполнит simulate_tag — спама нет."""
+    global _book_polling_task
+
+    connected = await book_reader.connect()
+    if not connected:
+        logger.warning('Книжный ридер недоступен — авто-возврат по метке выключен')
+        return False
+
+    def sync_callback(tag):
+        epc = tag.get('epc') if isinstance(tag, dict) else tag
+        if epc:
+            asyncio.create_task(on_book_detected(epc))
+
+    book_reader.on_tag_read = sync_callback
+
+    poll_interval = RFID.get('book_poll_interval', 1.0)
+    _book_polling_task = asyncio.create_task(
+        book_reader.start_polling(interval=poll_interval)
+    )
+    logger.info('Опрос книжного ридера запущен (RRU9816)')
+    return True
+
+
+def stop_book_polling():
+    """Остановка опроса книжного ридера"""
+    global _book_polling_task
+
+    book_reader.stop_polling()
+    if _book_polling_task:
+        _book_polling_task.cancel()
+        _book_polling_task = None
+
+    logger.info('Опрос книжного ридера остановлен')
 
 
 async def startup_checks():
@@ -179,6 +239,9 @@ async def on_startup(app):
     # Запуск опроса карт (NFC + UHF)
     await start_card_polling()
 
+    # Запуск опроса книжного ридера (метка книги в окне → авто-возврат)
+    await start_book_polling()
+
     # Start IRBIS offline sync periodic task
     try:
         from bookcabinet.irbis.sync_queue import sync_queue
@@ -207,7 +270,7 @@ async def on_shutdown(app):
 
     algorithms.stop()
     stop_card_polling()
-    book_reader.stop_polling()
+    stop_book_polling()
 
     # Stop IRBIS sync task
     try:
