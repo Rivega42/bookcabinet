@@ -73,7 +73,7 @@ def seek_endstop(name, direction, sensor, back_dir):
     """FAST -> BACKOFF -> SLOW"""
     print(f"[{name}] FAST...", end=" ", flush=True)
     steps, hit = move_until(direction, sensor, FAST)
-    print(f"{"OK" if hit else "FAIL"} ({steps} steps)")
+    print(f"{'OK' if hit else 'FAIL'} ({steps} steps)")
     if not hit:
         return 0, False
     
