@@ -573,13 +573,17 @@ async def post_wizard_exit(request):
 async def get_rfid_readers(request):
     """Список считывателей в форме, которую ждёт админка (массив)."""
     status = unified_reader.get_status()
+    try:
+        book_connected = book_reader.get_status().get('connected', False)
+    except Exception:
+        book_connected = False
     return json_response([
         {'id': 'nfc', 'name': 'ACR1281U-C', 'type': 'NFC 13.56MHz',
          'description': 'Читательские билеты', 'connected': status.get('nfc_connected', False)},
         {'id': 'uhf_card', 'name': 'IQRFID-5102', 'type': 'UHF 900MHz',
          'description': 'Карты ЕКП', 'connected': status.get('uhf_connected', False)},
         {'id': 'book', 'name': 'RRU9816', 'type': 'UHF 900MHz',
-         'description': 'Метки книг (не подключён в опрос)', 'connected': False},
+         'description': 'Метки книг', 'connected': book_connected},
     ])
 
 

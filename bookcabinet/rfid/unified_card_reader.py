@@ -240,12 +240,14 @@ class UnifiedCardReader:
         # Запускаем оба цикла параллельно
         tasks = []
         
-        if self._nfc_available:
+        # NFC-цикл запускаем всегда (кроме mock): если ридер не поднялся на старте
+        # или будет переподключён в рантайме — цикл сам переподключится.
+        if self._nfc_available or not self.mock_mode:
             tasks.append(asyncio.create_task(self._poll_nfc_loop(poll_interval)))
-        
+
         if self._uhf_available:
             tasks.append(asyncio.create_task(self._poll_uhf_loop(poll_interval)))
-        
+
         if not tasks:
             print("[UnifiedReader] Нет доступных считывателей!")
             return
@@ -262,10 +264,26 @@ class UnifiedCardReader:
         print("[UnifiedReader] Остановка опроса")
     
     async def _poll_nfc_loop(self, interval: float):
-        """Цикл опроса NFC считывателей - проверяем все интерфейсы"""
+        """Цикл опроса NFC считывателей - проверяем все интерфейсы.
+        Если ридеров нет (NFC не поднялся / переподключён) — раз в ~10с пробуем
+        переподключиться. Рабочий путь с подключённым NFC не затрагивается."""
         print(f"[NFC] Цикл опроса запущен для {len(self._nfc_readers)} интерфейсов")
-        
+        _reconnect_countdown = 0
+
         while self._running:
+            # Страхующее переподключение, если NFC сейчас недоступен (не mock)
+            if not self._nfc_readers and not self.mock_mode:
+                _reconnect_countdown -= 1
+                if _reconnect_countdown <= 0:
+                    _reconnect_countdown = max(1, int(10 / max(interval, 0.1)))
+                    try:
+                        if await self._connect_nfc() and self._nfc_readers:
+                            print(f"[NFC] Переподключено: {len(self._nfc_readers)} интерфейсов")
+                    except Exception:
+                        pass
+                await asyncio.sleep(interval)
+                continue
+
             # Проверяем все интерфейсы ACR1281
             for reader in self._nfc_readers:
                 try:
