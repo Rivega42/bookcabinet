@@ -102,8 +102,20 @@ class Calibration:
                     if 'tray' not in data:
                         data['tray'] = self._default_data()['tray']
                     return data
-            except:
+            except Exception:
                 pass
+        # Файла нет (или он битый) → едем по ДЕФОЛТНЫМ XY/grab, НЕ по полевым
+        # racks/shelves из корневого calibration.json. На шкафу это надо видеть:
+        # пока не прогнан встроенный мастер калибровки, механика приложения на дефолтах.
+        # Подробности — docs/FLOWS.md, раздел «два файла калибровки».
+        try:
+            import logging
+            logging.getLogger(__name__).warning(
+                'Калибровка приложения %s не найдена — используются ДЕФОЛТНЫЕ '
+                'positions/grab (не полевые racks/shelves). Прогоните мастер '
+                'калибровки в админке. См. docs/FLOWS.md.', self.filepath)
+        except Exception:
+            pass
         return self._default_data()
     
     def save(self):
