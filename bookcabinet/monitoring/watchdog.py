@@ -243,9 +243,11 @@ class StartupRecovery:
     Порядок важен (механика, Роман 2026-06-13): лоток хомится по датчику
     ТОЛЬКО когда каретка в home (x=0,y=0). Поэтому:
       1. шторки закрыть;
-      2. грубо втянуть лоток (слепо) — лишь чтобы освободить путь каретке;
-      3. хоминг XY → каретка в 0,0;
-      4. ТОЧНЫЙ sensor-хоминг лотка к концевику BACK (истинный ноль лотка).
+      2. замки выставить в 500 мкс (open) и УДЕРЖАТЬ — иначе сервы дребезжат
+         («reset locks before homing»);
+      3. грубо втянуть лоток (слепо) — лишь чтобы освободить путь каретке;
+      4. хоминг XY → каретка в 0,0;
+      5. ТОЧНЫЙ sensor-хоминг лотка к концевику BACK (истинный ноль лотка).
     """
 
     async def check_and_recover(self) -> dict:
@@ -253,7 +255,8 @@ class StartupRecovery:
 
         Returns dict summarizing what was done.
         """
-        results = {'shutters': None, 'tray': None, 'homing': None, 'tray_homing': None}
+        results = {'shutters': None, 'locks': None, 'tray': None,
+                   'homing': None, 'tray_homing': None}
 
         try:
             from ..hardware.shutters import shutters
@@ -265,6 +268,19 @@ class StartupRecovery:
         except Exception as e:
             results['shutters'] = f'error: {e}'
             db.add_system_log('ERROR', f'Startup recovery shutters: {e}', 'watchdog')
+
+        try:
+            from ..hardware.servos import servos
+
+            # Замки → open (500 мкс) и УДЕРЖИВАТЬ. Иначе сервоприводы дребезжат
+            # (Роман 2026-06-13: pigs s 12 500 / s 13 500). set_angle(0) = 500 мкс,
+            # PWM не снимается. Делать ДО хоминга («reset locks before homing»).
+            await servos.open_lock('lock1')
+            await servos.open_lock('lock2')
+            results['locks'] = 'reset (500us, held)'
+        except Exception as e:
+            results['locks'] = f'error: {e}'
+            db.add_system_log('ERROR', f'Startup recovery locks: {e}', 'watchdog')
 
         try:
             from ..hardware.sensors import sensors

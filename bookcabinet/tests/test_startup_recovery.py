@@ -18,6 +18,10 @@ class TestStartupRecovery(unittest.TestCase):
         self.shutters.close_shutter = AsyncMock(
             side_effect=lambda which: self.calls.append(f'close_{which}'))
 
+        self.servos = MagicMock()
+        self.servos.open_lock = AsyncMock(
+            side_effect=lambda lock: self.calls.append(f'lock_open_{lock}'))
+
         self.sensors = MagicMock()
         self.sensors.is_tray_retracted = MagicMock(return_value=False)
 
@@ -31,6 +35,7 @@ class TestStartupRecovery(unittest.TestCase):
 
         self.patches = [
             patch('bookcabinet.hardware.shutters.shutters', self.shutters),
+            patch('bookcabinet.hardware.servos.servos', self.servos),
             patch('bookcabinet.hardware.sensors.sensors', self.sensors),
             patch('bookcabinet.hardware.motors.motors', self.motors),
         ]
@@ -49,10 +54,16 @@ class TestStartupRecovery(unittest.TestCase):
         result = self._run()
         self.assertEqual(result['homing'], 'ok')
         self.assertEqual(result['tray_homing'], 'ok')
-        # порядок: грубый retract → хоминг XY → sensor-хоминг лотка
+        self.assertEqual(result['locks'], 'reset (500us, held)')
+        # порядок: замки(open) → грубый retract → хоминг XY → sensor-хоминг лотка
+        self.assertIn('lock_open_lock1', self.calls)
+        self.assertIn('lock_open_lock2', self.calls)
         self.assertIn('coarse_retract', self.calls)
         self.assertIn('home_xy', self.calls)
         self.assertIn('home_tray', self.calls)
+        # замки сброшены ДО хоминга («reset locks before homing»)
+        self.assertLess(self.calls.index('lock_open_lock1'), self.calls.index('home_xy'),
+                        'замки должны сбрасываться ДО хоминга')
         self.assertLess(self.calls.index('home_xy'), self.calls.index('home_tray'),
                         'sensor-хоминг лотка должен идти ПОСЛЕ хоминга XY')
         self.motors.home_tray_with_sensor.assert_awaited_once()
