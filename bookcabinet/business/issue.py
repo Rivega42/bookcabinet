@@ -108,7 +108,8 @@ class IssueService:
 
             # === WAIT_USER ===
             self.state = IssueState.WAIT_USER
-            await algorithms.wait_for_user()
+            # Детект «книгу забрали» по RRU9816 (метка книги перестала видеться в окне)
+            await algorithms.wait_for_user(book_rfid=book_rfid)
 
             # === GIVE_SHELF ===
             self.state = IssueState.GIVE_SHELF
