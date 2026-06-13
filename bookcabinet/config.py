@@ -86,9 +86,12 @@ SENSOR_USE_PULLUP = True
 BLOCKED_CELLS = {'FRONT': [], 'BACK': []}
 RFID = {
     'nfc_card_reader': '/dev/pcsc',
-    'uhf_card_reader': '/dev/ttyUSB1',
+    # Стабильные имена из udev (по USB-порту) — фикс на шкафу 2026-06-13.
+    # ttyUSB-номера зависят от порядка включения, поэтому только симлинки;
+    # ttyUSB в fallback на случай отсутствия симлинка.
+    'uhf_card_reader': '/dev/rfid_uhf_card',   # IQRFID-5102, ЕКП
     'uhf_card_baudrate': 57600,
-    'book_reader': '/dev/ttyUSB2',
+    'book_reader': '/dev/rfid_book',           # RRU9816, метки книг
     'book_baudrate': 57600,
     'uhf_card_reader_fallback': '/dev/ttyUSB1',
     'book_reader_fallback': '/dev/ttyUSB0',
