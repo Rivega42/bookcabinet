@@ -25,7 +25,7 @@ echo "  BookCabinet — миграция БД"
 echo "========================================"
 
 echo -e "${YELLOW}[1/5] Остановка сервисов...${NC}"
-systemctl stop bookcabinet-ui bookcabinet-daemon 2>/dev/null || true
+systemctl stop bookcabinet 2>/dev/null || true
 echo -e "${GREEN}OK${NC}"
 
 echo -e "${YELLOW}[2/5] Бэкап БД...${NC}"
@@ -39,18 +39,18 @@ echo -e "${YELLOW}[3/5] alembic upgrade head...${NC}"
 su -c "cd '$PROJECT_DIR' && python3 -m alembic upgrade head" "$SERVICE_USER"
 echo -e "${GREEN}OK${NC}"
 
-echo -e "${YELLOW}[4/5] Старт сервисов...${NC}"
-systemctl start bookcabinet-daemon bookcabinet-ui
+echo -e "${YELLOW}[4/5] Старт сервиса (ВНИМАНИЕ: старт = ДВИЖЕНИЕ — замки→хоминг XY→калибровка лотка)...${NC}"
+systemctl start bookcabinet
 echo -e "${GREEN}OK${NC}"
 
-echo -e "${YELLOW}[5/5] Проверка /api/status...${NC}"
-for i in $(seq 1 30); do
+echo -e "${YELLOW}[5/5] Проверка /api/status (до 60с — старт включает калибровку лотка)...${NC}"
+for i in $(seq 1 60); do
     if curl -sf http://localhost:5000/api/status > /dev/null; then
         echo -e "${GREEN}Сервер отвечает. Миграция завершена.${NC}"
         exit 0
     fi
     sleep 1
 done
-echo -e "${RED}Сервер не ответил за 30 с. Проверь: journalctl -u bookcabinet-ui -n 50${NC}"
+echo -e "${RED}Сервер не ответил за 30 с (старт ~40с из-за калибровки лотка — подожди ещё). Проверь: journalctl -u bookcabinet -n 50${NC}"
 echo -e "${YELLOW}Бэкап для отката: $BACKUP${NC}"
 exit 1
