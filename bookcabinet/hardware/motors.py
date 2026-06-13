@@ -264,55 +264,122 @@ class Motors:
 
     async def home_tray_with_sensor(self, sensors) -> bool:
         """
-        Хоминг лотка по концевику SENSOR_TRAY_BEGIN.
-        ВАЖНО: вызывать ТОЛЬКО когда каретка в position x=0, y=0!
-        Если каретка не в 0,0 — возвращает False с ошибкой.
+        Калибровка лотка по образцу полевого tools/tray_calib_final.py:
+        FRONT → BACK (измерение полного хода) → CENTER.
+
+        Двухэтапный подход на каждый концевик (FAST 10000 → backoff 1500 @2000
+        → SLOW 1500). КЛЮЧЕВОЕ: sensor_stable требует 10 ПОДРЯД чтений «нажато»
+        (любой 0 сбрасывает) — устойчиво к шуму GPIO20. Прежний одноэтапный
+        хоминг только до BACK ловил ЛОЖНОЕ срабатывание → ложный ноль (баг,
+        вскрытый на железе 2026-06-13).
+
+        DIR: 0=FRONT, 1=BACK. Вызывать ТОЛЬКО при каретке в home (x=0, y=0).
+        Возвращает False, если любой концевик не достигнут за MOVE_TIMEOUT.
         """
         if self.position["x"] != 0 or self.position["y"] != 0:
-            print("[homing] ERROR: tray homing only allowed at x=0, y=0")
+            print("[tray] ERROR: калибровка лотка только при каретке в 0,0")
             return False
-
-        HOMING_SPEED = 800
-        HOMING_CHUNK = 100
-        MAX_STEPS = 30000
 
         if self.mock_mode:
             await asyncio.sleep(1.0)
             self.position["tray"] = 0
             return True
 
-        # GPIO20 (SENSOR_TRAY_BEGIN) сильно шумит от помех мотора лотка.
-        # Полевые сессии (2026-04-16): фильтра 1000 мкс мало, нужен 5000 мкс.
-        tray_begin_pin = GPIO_PINS["SENSOR_TRAY_BEGIN"]
+        import pigpio
+        STEP = GPIO_PINS["TRAY_STEP"]; DIR = GPIO_PINS["TRAY_DIR"]
+        EN1 = GPIO_PINS["TRAY_ENA_1"]; EN2 = GPIO_PINS["TRAY_ENA_2"]
+        FRONT = GPIO_PINS["SENSOR_TRAY_END"]; BACK = GPIO_PINS["SENSOR_TRAY_BEGIN"]
+        FAST, BACKOFF_SPD, SLOW = 10000, 2000, 1500
+        BACKOFF_STEPS = 1500
+        MOVE_TIMEOUT = 20.0   # страховка на подход к концевику (в полевом скрипте таймаута нет)
+
+        for p in (STEP, DIR, EN1, EN2):
+            self.pi.set_mode(p, pigpio.OUTPUT)
+        self.pi.write(EN1, 1); self.pi.write(EN2, 1)
+        for s in (FRONT, BACK):
+            self.pi.set_mode(s, pigpio.INPUT)
+            self.pi.set_pull_up_down(s, pigpio.PUD_UP)
+            self.pi.set_glitch_filter(s, 1000)
+        time.sleep(0.1)
+
+        def make_wave(speed):
+            period = int(1000000 / speed); half = period // 2
+            self.pi.wave_clear()
+            self.pi.wave_add_generic([pigpio.pulse(1 << STEP, 0, half),
+                                      pigpio.pulse(0, 1 << STEP, half)])
+            return self.pi.wave_create()
+
+        def stable(sensor, n=10):
+            for _ in range(n):
+                if self.pi.read(sensor) == 0:
+                    return False
+                time.sleep(0.0005)
+            return True
+
+        def move_steps(direction, steps, speed):
+            w = make_wave(speed)
+            self.pi.write(EN1, 0); self.pi.write(EN2, 0)
+            self.pi.write(DIR, direction); time.sleep(0.05)
+            self.pi.wave_send_repeat(w)
+            time.sleep(steps / speed)
+            self.pi.wave_tx_stop()
+            self.pi.write(EN1, 1); self.pi.write(EN2, 1)
+            self.pi.wave_delete(w)
+
+        def move_until(direction, sensor, speed):
+            w = make_wave(speed)
+            self.pi.write(EN1, 0); self.pi.write(EN2, 0)
+            self.pi.write(DIR, direction); time.sleep(0.05)
+            self.pi.wave_send_repeat(w)
+            t0 = time.time(); reached = False
+            while time.time() - t0 < MOVE_TIMEOUT:
+                if stable(sensor, 10):
+                    reached = True; break
+            self.pi.wave_tx_stop()
+            self.pi.write(EN1, 1); self.pi.write(EN2, 1)
+            steps = int((time.time() - t0) * speed)
+            self.pi.wave_delete(w)
+            return steps, reached
+
+        def home_to(direction, sensor):
+            _, hit = move_until(direction, sensor, FAST)
+            if not hit:
+                return None
+            move_steps(1 if direction == 0 else 0, BACKOFF_STEPS, BACKOFF_SPD)
+            time.sleep(0.1)
+            steps, hit = move_until(direction, sensor, SLOW)
+            return steps if hit else None
+
         try:
-            self.pi.set_glitch_filter(tray_begin_pin, 5000)
-        except Exception:
-            pass
-
-        # Лоток назад (DIR=HIGH = назад по config)
-        self.pi.write(GPIO_PINS["TRAY_DIR"], 1)
-        time.sleep(0.01)
-        total = 0
-        reached = False
-        # Debounce для SENSOR_TRAY_BEGIN (pin 20 - дребезг!)
-        stable_count = 0
-        while stable_count < 3 and total < MAX_STEPS:
-            self._wave_steps([GPIO_PINS["TRAY_STEP"]], HOMING_CHUNK, HOMING_SPEED)
-            total += HOMING_CHUNK
-            if sensors.is_triggered("tray_begin"):
-                stable_count += 1
-            else:
-                stable_count = 0
-            await asyncio.sleep(0)
-
-        reached = stable_count >= 3
-        if not reached:
-            # Концевик не достигнут за MAX_STEPS — НЕ устанавливаем ноль вслепую.
-            print(f"[homing] ERROR: лоток не дошёл до концевика BACK за {MAX_STEPS} шагов")
-            return False
-
-        self.position["tray"] = 0
-        return True
+            # 1. К FRONT (DIR=0) двухэтапно
+            if home_to(0, FRONT) is None:
+                print("[tray] FRONT не достигнут (таймаут)")
+                return False
+            time.sleep(0.3)
+            # 2. К BACK (DIR=1), меряем полный ход
+            fast_steps, hit = move_until(1, BACK, FAST)
+            if not hit:
+                print("[tray] BACK fast не достигнут (таймаут)")
+                return False
+            move_steps(0, BACKOFF_STEPS, BACKOFF_SPD)
+            time.sleep(0.1)
+            slow_steps, hit = move_until(1, BACK, SLOW)
+            if not hit:
+                print("[tray] BACK slow не достигнут (таймаут)")
+                return False
+            total = fast_steps + slow_steps
+            center = total // 2
+            # 3. В CENTER (DIR=0 от BACK)
+            move_steps(0, center, FAST)
+            self.position["tray"] = 0   # лоток в центре = рабочее положение покоя
+            print(f"[tray] калибровка OK: total={total}, center={center}")
+            return True
+        finally:
+            self.pi.write(EN1, 1); self.pi.write(EN2, 1)
+            try:
+                self.pi.wave_clear()
+            except Exception:
+                pass
     
     async def test_motor(self, motor: str, direction: int, steps: int = 500) -> bool:
         """Test individual motor"""
