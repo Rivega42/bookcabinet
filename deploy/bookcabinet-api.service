@@ -5,12 +5,15 @@
 # этим содержимым (или установить как bookcabinet-api и отключить старый), см. deploy/DEPLOY.md.
 # Перед этим: npm run build (aiohttp отдаёт dist/public) и deploy/migrate.sh.
 #
-# Сверено с устройством 2026-06-13: pcscd.socket (не .service — иначе дубль pcscd!),
-# HOST локальный (раньше было 0.0.0.0 — открывало API в сеть при синглтон-авторизации).
+# Сверено с устройством 2026-06-13: pcscd через ПОСТОЯННЫЙ pcscd-daemon.service
+# (Type=forking, sleep 5 для USB, держит claim ACR заранее → нет гонки старта NFC).
+# НЕ через pcscd.service/.socket: их --auto-exit + параллельный daemon давали дубль
+# pcscd → LIBUSB_BUSY и NFC не поднимался. socket-механизм на устройстве отключён.
+# HOST локальный (раньше 0.0.0.0 — открывало API в сеть при синглтон-авторизации).
 [Unit]
 Description=BookCabinet API (Python aiohttp)
-After=network.target pigpiod.service pcscd.socket
-Wants=pigpiod.service pcscd.socket
+After=network.target pigpiod.service pcscd-daemon.service
+Wants=pigpiod.service pcscd-daemon.service
 
 [Service]
 Type=simple

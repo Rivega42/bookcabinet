@@ -43,8 +43,18 @@ git checkout main && git reset --hard origin/main   # ОСТОРОЖНО: раб
 Затем собрать фронт на устройстве или скопировать `dist/`.
 
 Проверить, что фиксы на месте: `grep rfid_uhf_card bookcabinet/config.py`,
-`grep 1-1.3.1 /etc/udev/rules.d/99-bookcabinet-rfid.rules` (udev-правило обновить из репо при необходимости),
-`systemctl cat bookcabinet | grep pcscd.socket`.
+`grep 1-1.3.1 /etc/udev/rules.d/99-bookcabinet-rfid.rules` (udev-правило обновить из репо при необходимости).
+
+NFC/pcscd (сверено 2026-06-13): должен быть ОДИН постоянный pcscd через `pcscd-daemon.service`,
+а штатные `pcscd.service`/`pcscd.socket` — отключены (иначе дубль → LIBUSB_BUSY, NFC не встаёт).
+На устройстве уже настроено; для воспроизводимости/чистой установки:
+```
+sudo cp deploy/pcscd-daemon.service /etc/systemd/system/
+sudo systemctl disable --now pcscd.service pcscd.socket
+sudo systemctl daemon-reload && sudo systemctl enable --now pcscd-daemon.service
+python3 -c "from smartcard.System import readers; print(readers())"   # → видит ACR (3 интерфейса)
+```
+Юнит сервиса зависит от `pcscd-daemon.service` (ридер заклеймлен ДО старта → NFC без гонки).
 
 ## Фаза 3 — миграция БД (с бэкапом, без движения)
 ```
