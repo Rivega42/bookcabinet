@@ -24,6 +24,7 @@ export class PythonBridgeService {
   private bridgePath: string;
   private cwd: string;
   private timeoutMs: number;
+  private pythonBin: string;
 
   constructor() {
     // Resolve BOOKCABINET_ROOT from env, or fall back to repo root relative to this file.
@@ -35,6 +36,8 @@ export class PythonBridgeService {
       process.env.PYTHON_BRIDGE_PATH ||
       path.join(this.cwd, 'bookcabinet', 'bridge.py');
     this.timeoutMs = 120_000;
+    // On the Pi this is python3; on a dev laptop point PYTHON_BIN at a venv interpreter.
+    this.pythonBin = process.env.PYTHON_BIN || 'python3';
   }
 
   /**
@@ -47,13 +50,14 @@ export class PythonBridgeService {
     onProgress?: (msg: any) => void,
   ): Promise<{ success: boolean; [key: string]: any }> {
     return new Promise((resolve, reject) => {
-      const proc = spawn('python3', [this.bridgePath, command, ...args], {
+      const proc = spawn(this.pythonBin, [this.bridgePath, command, ...args], {
         cwd: this.cwd,
         timeout: this.timeoutMs,
       });
 
       let stdout = '';
       let stderr = '';
+      let resultMsg: { success: boolean; [key: string]: any } | null = null;
 
       proc.stdout.on('data', (data: Buffer) => {
         stdout += data.toString();
@@ -65,6 +69,12 @@ export class PythonBridgeService {
             const msg = JSON.parse(line);
             if (msg.type === 'progress' && onProgress) {
               onProgress(msg);
+            } else if (msg.type === 'result') {
+              // Финальная строка результата приходит с \n и раньше съедалась
+              // этим же циклом — копим её здесь, отдаём на close.
+              resultMsg = msg;
+            } else if (msg.type === 'error') {
+              resultMsg = { success: false, message: msg.message };
             }
           } catch {
             // non-JSON line, ignore
@@ -77,17 +87,20 @@ export class PythonBridgeService {
       });
 
       proc.on('close', (code: number) => {
-        // Parse remaining stdout
-        if (stdout.trim()) {
+        // Parse remaining stdout (result line without trailing newline)
+        if (!resultMsg && stdout.trim()) {
           try {
             const msg = JSON.parse(stdout.trim());
             if (msg.type === 'result') {
-              resolve(msg);
-              return;
+              resultMsg = msg;
             }
           } catch {
             // ignore
           }
+        }
+        if (resultMsg) {
+          resolve(resultMsg);
+          return;
         }
         if (code !== 0) {
           reject(

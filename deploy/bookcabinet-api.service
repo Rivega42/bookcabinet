@@ -1,0 +1,32 @@
+# BookCabinet — целевой python-бэкенд (aiohttp, решение 2026-06-12).
+#
+# На шкафу боевой юнит называется bookcabinet.service и УЖЕ запускает python.
+# Этот файл — эталонное содержимое. Деплой = обновить /etc/systemd/system/bookcabinet.service
+# этим содержимым (или установить как bookcabinet-api и отключить старый), см. deploy/DEPLOY.md.
+# Перед этим: npm run build (aiohttp отдаёт dist/public) и deploy/migrate.sh.
+#
+# Сверено с устройством 2026-06-13: pcscd.socket (не .service — иначе дубль pcscd!),
+# HOST локальный (раньше было 0.0.0.0 — открывало API в сеть при синглтон-авторизации).
+[Unit]
+Description=BookCabinet API (Python aiohttp)
+After=network.target pigpiod.service pcscd.socket
+Wants=pigpiod.service pcscd.socket
+
+[Service]
+Type=simple
+User=admin42
+WorkingDirectory=/home/admin42/bookcabinet
+ExecStart=/usr/bin/python3 -m bookcabinet.main
+Restart=always
+RestartSec=3
+# Киоск локальный: наружу не слушаем (авторизация — синглтон, см. docs/STATE.md)
+Environment=HOST=127.0.0.1
+Environment=PORT=5000
+Environment=MOCK_MODE=false
+Environment=IRBIS_MOCK=false
+Environment=DATABASE_PATH=/home/admin42/bookcabinet/bookcabinet/data/shelf_data.db
+Environment=PYTHONUNBUFFERED=1
+SupplementaryGroups=dialout gpio i2c spi plugdev
+
+[Install]
+WantedBy=multi-user.target

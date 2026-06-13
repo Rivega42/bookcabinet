@@ -1,0 +1,14 @@
+node_modules
+dist
+.venv
+.local-dev
+.git
+_attic
+data
+logs
+backups
+*.log
+*.db
+__pycache__
+*.pyc
+.env

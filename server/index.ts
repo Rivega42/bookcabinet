@@ -87,8 +87,9 @@ app.use((req, res, next) => {
   // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || '5000', 10);
   
-  // Use localhost for Windows compatibility, 0.0.0.0 for Replit
-  const host = process.env.REPLIT_DEPLOYMENT_ID ? "0.0.0.0" : "127.0.0.1";
+  // HOST из окружения (systemd на Pi и docker ставят 0.0.0.0);
+  // без него — localhost для Windows, 0.0.0.0 для Replit.
+  const host = process.env.HOST || (process.env.REPLIT_DEPLOYMENT_ID ? "0.0.0.0" : "127.0.0.1");
   
   server.listen({
     port,

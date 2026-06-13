@@ -122,20 +122,11 @@ class IssueService:
 
             # === UPDATE_DB ===
             self.state = IssueState.UPDATE_DB
-            db.update_book(book['id'],
-                status='issued',
-                issued_to=user_rfid,
-                issued_at=datetime.now().isoformat(),
-                reserved_by=None,
-                cell_id=None
-            )
-
-            db.update_cell(cell['id'],
-                status='empty',
-                book_rfid=None,
-                book_title=None,
-                reserved_for=None
-            )
+            # Атомарно: книга → issued + журнал операции (db v2)
+            duration = int((datetime.now() - start_time).total_seconds() * 1000)
+            db.issue_book_tx(book['id'], user_rfid,
+                cell={**cell, 'book_rfid': book_rfid},
+                duration_ms=duration)
 
             # === CALL_IRBIS ===
             self.state = IssueState.CALL_IRBIS
@@ -152,17 +143,6 @@ class IssueService:
 
             # === DONE ===
             self.state = IssueState.DONE
-
-            duration = int((datetime.now() - start_time).total_seconds() * 1000)
-            db.log_operation('ISSUE',
-                cell_row=cell['row'],
-                cell_x=cell['x'],
-                cell_y=cell['y'],
-                book_rfid=book_rfid,
-                user_rfid=user_rfid,
-                duration_ms=duration
-            )
-
             db.add_system_log('INFO', f"Выдана книга: {book['title']}", 'issue')
 
             return {

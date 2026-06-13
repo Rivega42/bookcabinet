@@ -8,8 +8,8 @@ import sys
 import os
 from datetime import datetime
 
-# Добавляем путь к модулям
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Добавляем корень репозитория (tools/diagnostics/ → 2 уровня вверх)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from bookcabinet.rfid.unified_card_reader import unified_reader
 from bookcabinet.config import RFID

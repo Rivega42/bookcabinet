@@ -2,6 +2,9 @@ import { defineConfig } from 'vitest/config';
 import path from 'path';
 
 export default defineConfig({
+  // tsconfig ставит jsx:"preserve" (для vite), поэтому esbuild внутри vitest
+  // по умолчанию компилирует JSX в classic-режиме без импорта React.
+  esbuild: { jsx: 'automatic' },
   test: {
     environment: 'jsdom',
     globals: true,

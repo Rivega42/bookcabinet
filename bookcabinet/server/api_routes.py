@@ -1,11 +1,10 @@
 """
 REST API Routes - полная версия (Python aiohttp server).
 
-NOTE: These routes serve the Python aiohttp backend. The primary entry
-point for the React frontend is the TypeScript Express server defined in
-server/routes.ts. Both servers expose similar endpoints; the TS server is
-authoritative for the web UI, while this Python server is used when
-running the cabinet directly on the Raspberry Pi without Node.
+Решение 2026-06-12: aiohttp — целевой бэкенд. Express (server/routes.ts)
+остаётся боевым на шкафу до проверенной миграции; киоск-алиасы
+(/api/book/issue, /api/book/return и др.) обеспечивают паритет с ним,
+чтобы фронтенд работал с обоими серверами без изменений.
 """
 from aiohttp import web
 import json
@@ -34,6 +33,29 @@ from .websocket_handler import ws_handler
 from ..mechanics.teach import teach_mode
 from ..mechanics.calibration import AutoCalibrator
 from ..irbis.service import library_service
+
+
+async def _alert(message: str, component: str = 'operations'):
+    """Telegram-алёрт о сбое (no-op, если TELEGRAM_ENABLED не выставлен)."""
+    try:
+        await telegram.notify_error(message, component)
+    except Exception:
+        pass  # алёрт никогда не должен ронять операцию
+
+
+# Один механизм — одна операция: повторный клик «выдать» не должен
+# запускать второй механический цикл параллельно первому.
+_mech_lock = asyncio.Lock()
+
+
+def with_mech_lock(handler):
+    async def wrapped(request):
+        if _mech_lock.locked():
+            return json_response(
+                {'success': False, 'error': 'Шкаф занят: выполняется другая операция'}, 409)
+        async with _mech_lock:
+            return await handler(request)
+    return wrapped
 
 
 def _check_irbis_connected() -> bool:
@@ -187,7 +209,7 @@ async def get_status(request):
         'shutters': state['shutters'],
         'irbisConnected': _check_irbis_connected(),
         'autonomousMode': IRBIS['mock'],
-        'maintenanceMode': False,
+        'maintenanceMode': db.get_setting('maintenance_mode', '0') == '1',
         'statistics': stats,
     })
 
@@ -320,6 +342,245 @@ async def post_return(request):
     
     result = await return_service.return_book(book_rfid, ws_handler.send_progress)
     return json_response(result)
+
+
+# ============ КИОСК: паритет с Express-клиентом ============
+# Киоск (client/src/components/kiosk/*) ждёт прогресс в шкале «механических
+# шагов» (выдача 1–14, возврат 1–13) и события operation_started/completed/
+# failed. Транслируем события mechanics/algorithms в эту шкалу.
+
+def _camelize_row(row: dict) -> dict:
+    """Дублирует snake_case-поля camelCase-алиасами для TS-клиента."""
+    aliases = {
+        'cell_id': 'cellId', 'reserved_by': 'reservedForRfid',
+        'issued_to': 'issuedToRfid', 'issued_at': 'issuedAt',
+        'due_date': 'dueDate', 'book_rfid': 'bookRfid',
+        'book_title': 'bookTitle', 'reserved_for': 'reservedFor',
+        'needs_extraction': 'needsExtraction', 'card_type': 'cardType',
+    }
+    out = dict(row)
+    for snake, camel in aliases.items():
+        if snake in row:
+            out[camel] = row[snake]
+    return out
+
+
+class _KioskProgress:
+    """algorithms-события {operation: TAKE/GIVE, step, message} →
+    киоск-шкала {step: 1-14, label, status, wait_seconds}."""
+
+    _TAKE_MAP = {1: 1, 2: 2, 3: 4, 4: 4, 5: 4, 6: 4, 7: 4, 8: 4,
+                 9: 5, 10: 6, 11: 7, 12: 8, 13: 9}
+
+    def __init__(self, operation: str):
+        self.operation = operation
+        self._wait_sent = False
+
+    async def __call__(self, ev: dict):
+        op = ev.get('operation')
+        step = ev.get('step', 1)
+        label = ev.get('message', '')
+        if self.operation == 'issue':
+            if op == 'TAKE':
+                mech = self._TAKE_MAP.get(step, 8)
+                await ws_handler.send_progress({'step': mech, 'label': label, 'status': 'running'})
+                if mech == 9 and not self._wait_sent:
+                    # внешняя шторка открыта → таймер «заберите книгу»
+                    self._wait_sent = True
+                    wait_s = max(1, TIMEOUTS.get('user_wait', 30000) // 1000)
+                    await ws_handler.send_progress(
+                        {'step': 9, 'label': label, 'status': 'done', 'wait_seconds': wait_s})
+                    await ws_handler.send_progress(
+                        {'step': 10, 'label': 'Ожидание пользователя', 'status': 'running', 'wait_seconds': wait_s})
+            elif op == 'GIVE':
+                mech = min(11 + (step - 1) // 4, 14)  # 12 шагов GIVE → 11..14
+                await ws_handler.send_progress({'step': mech, 'label': label, 'status': 'running'})
+        else:  # return: в business-пути механика — только GIVE (размещение в ячейку)
+            if op == 'GIVE':
+                mech = 4 + max(1, round(step * 8 / 12))  # 5..12
+                await ws_handler.send_progress({'step': mech, 'label': label, 'status': 'running'})
+
+
+async def post_book_issue(request):
+    """Алиас киоска: POST /api/book/issue {bookRfid|book_rfid, userRfid|reader_uid}."""
+    data = await request.json()
+    book_rfid = data.get('bookRfid') or data.get('book_rfid')
+    user_rfid = data.get('userRfid') or data.get('reader_uid')
+    if not book_rfid or not user_rfid:
+        return json_response({'success': False, 'error': 'bookRfid и userRfid обязательны'}, 400)
+
+    await ws_handler.broadcast({'type': 'operation_started',
+                                'data': {'operation': 'issue', 'bookRfid': book_rfid, 'userRfid': user_rfid}})
+    result = await issue_service.issue_book(book_rfid, user_rfid, _KioskProgress('issue'))
+    if result.get('success'):
+        await ws_handler.broadcast({'type': 'operation_completed',
+                                    'data': {'operation': 'issue', 'bookRfid': book_rfid}})
+    else:
+        await ws_handler.broadcast({'type': 'operation_failed',
+                                    'data': {'operation': 'issue', 'message': result.get('error', 'Issue failed')}})
+        await _alert(f"Сбой выдачи {book_rfid}: {result.get('error', '?')}", 'issue')
+    return json_response(result)
+
+
+async def post_book_return(request):
+    """Алиас киоска: POST /api/book/return {bookRfid|book_rfid}."""
+    data = await request.json()
+    book_rfid = data.get('bookRfid') or data.get('book_rfid')
+    if not book_rfid:
+        return json_response({'success': False, 'error': 'bookRfid обязателен'}, 400)
+
+    await ws_handler.broadcast({'type': 'operation_started',
+                                'data': {'operation': 'return', 'bookRfid': book_rfid}})
+    result = await return_service.return_book(book_rfid, _KioskProgress('return'))
+    if result.get('success'):
+        await ws_handler.broadcast({'type': 'operation_completed',
+                                    'data': {'operation': 'return', 'bookRfid': book_rfid}})
+    else:
+        await ws_handler.broadcast({'type': 'operation_failed',
+                                    'data': {'operation': 'return', 'message': result.get('error', 'Return failed')}})
+        await _alert(f"Сбой возврата {book_rfid}: {result.get('error', '?')}", 'return')
+    return json_response(result)
+
+
+async def get_books(request):
+    return json_response([_camelize_row(b) for b in db.get_all_books()])
+
+
+async def get_users(request):
+    return json_response([_camelize_row(u) for u in db.get_all_users()])
+
+
+async def post_auth_logout(request):
+    """Киоск шлёт logout при автозавершении сессии; сессии в aiohttp
+    клиентские, серверу достаточно подтвердить."""
+    return json_response({'success': True})
+
+
+async def post_emergency_stop(request):
+    """Алиас киоска для /api/stop."""
+    algorithms.stop()
+    await ws_handler.broadcast({'type': 'emergency_stop', 'data': {}})
+    await _alert('Аварийная остановка (кнопка СТОП)', 'emergency')
+    return json_response({'success': True, 'message': 'Аварийная остановка'})
+
+
+async def post_shutter_close_all(request):
+    """Киоск закрывает обе шторки при автологауте."""
+    await shutters.close_shutter('outer')
+    await shutters.close_shutter('inner')
+    return json_response({'success': True})
+
+
+async def post_maintenance(request):
+    data = await request.json()
+    enabled = bool(data.get('enabled'))
+    db.set_setting('maintenance_mode', '1' if enabled else '0')
+    await ws_handler.broadcast({'type': 'maintenance', 'data': {'enabled': enabled}})
+    return json_response({'success': True, 'enabled': enabled})
+
+
+async def post_test_tray(request):
+    """Тест лотка: {command: extend|retract} — только админ."""
+    error = role_check('admin')
+    if error:
+        return error
+    data = await request.json()
+    command = data.get('command', 'retract')
+    ok = await (motors.extend_tray() if command == 'extend' else motors.retract_tray())
+    db.add_system_log('INFO', f'Тест лотка: {command}', 'diagnostics')
+    return json_response({'success': bool(ok), 'command': command})
+
+
+async def post_test_servo(request):
+    """Тест серво: {servo: front|back, command: open|close} — только админ."""
+    error = role_check('admin')
+    if error:
+        return error
+    data = await request.json()
+    lock = 'lock1' if data.get('servo', 'front') in ('front', 'lock1') else 'lock2'
+    command = data.get('command', 'open')
+    if command == 'open':
+        await servos.open_lock(lock)
+    else:
+        await servos.close_lock(lock)
+    db.add_system_log('INFO', f'Тест серво: {lock} {command}', 'diagnostics')
+    return json_response({'success': True, 'servo': lock, 'command': command})
+
+
+async def _run_calibration_test(name: str) -> dict:
+    """Один тест калибровочного набора. В MOCK_MODE проходит быстро,
+    на железе реально двигает механику (только админ, по согласованию)."""
+    t0 = datetime.now()
+    try:
+        if name == 'motors':
+            pos = motors.get_position()
+            ok = await motors.move_xy(pos['x'] + 100, pos['y'])
+            ok = ok and await motors.move_xy(pos['x'], pos['y'])
+            message = 'XY туда-обратно 100 шагов'
+        elif name == 'tray':
+            ok = await motors.extend_tray(500) and await motors.retract_tray(500)
+            message = 'Лоток туда-обратно 500 шагов'
+        elif name == 'locks':
+            await servos.open_lock('lock1'); await servos.close_lock('lock1')
+            await servos.open_lock('lock2'); await servos.close_lock('lock2')
+            ok, message = True, 'Оба замка открыть/закрыть'
+        elif name == 'shutters':
+            await shutters.open_shutter('inner'); await shutters.close_shutter('inner')
+            await shutters.open_shutter('outer'); await shutters.close_shutter('outer')
+            ok, message = True, 'Обе шторки открыть/закрыть'
+        elif name == 'sensors':
+            readings = sensors.read_all()
+            ok, message = isinstance(readings, dict), f'Датчики: {readings}'
+        else:
+            return {'test': name, 'status': 'fail', 'message': f'Неизвестный тест: {name}'}
+    except Exception as e:
+        ok, message = False, str(e)
+    duration = int((datetime.now() - t0).total_seconds() * 1000)
+    return {'test': name, 'status': 'pass' if ok else 'fail', 'message': message, 'duration': duration}
+
+
+CALIBRATION_TESTS = ['motors', 'tray', 'locks', 'shutters', 'sensors']
+
+
+async def post_calibration_test_suite(request):
+    """Прогон всех калибровочных тестов — только админ."""
+    error = role_check('admin')
+    if error:
+        return error
+    results = [await _run_calibration_test(n) for n in CALIBRATION_TESTS]
+    passed = sum(1 for r in results if r['status'] == 'pass')
+    return json_response({
+        'success': passed == len(results),
+        'results': results,
+        'summary': {'passed': passed, 'total': len(results)},
+    })
+
+
+async def post_calibration_test_single(request):
+    error = role_check('admin')
+    if error:
+        return error
+    name = request.match_info['name']
+    result = await _run_calibration_test(name)
+    return json_response({'success': result['status'] == 'pass', 'result': result})
+
+
+async def post_wizard_exit(request):
+    """Выход из мастера калибровки (клиентский сброс; серверу — подтвердить)."""
+    return json_response({'success': True})
+
+
+async def get_rfid_readers(request):
+    """Список считывателей в форме, которую ждёт админка (массив)."""
+    status = unified_reader.get_status()
+    return json_response([
+        {'id': 'nfc', 'name': 'ACR1281U-C', 'type': 'NFC 13.56MHz',
+         'description': 'Читательские билеты', 'connected': status.get('nfc_connected', False)},
+        {'id': 'uhf_card', 'name': 'IQRFID-5102', 'type': 'UHF 900MHz',
+         'description': 'Карты ЕКП', 'connected': status.get('uhf_connected', False)},
+        {'id': 'book', 'name': 'RRU9816', 'type': 'UHF 900MHz',
+         'description': 'Метки книг (не подключён в опрос)', 'connected': False},
+    ])
 
 
 async def post_load_book(request):
@@ -1323,13 +1584,41 @@ def setup_routes(app: web.Application):
     app.router.add_post('/api/auth/card', post_auth_card)
     app.router.add_post('/api/auth/simulate', post_simulate_card)
     
-    # Book Operations
-    app.router.add_post('/api/issue', post_issue)
-    app.router.add_post('/api/return', post_return)
-    app.router.add_post('/api/load-book', post_load_book)
-    app.router.add_post('/api/extract', post_extract)
-    app.router.add_post('/api/extract-all', post_extract_all)
-    app.router.add_post('/api/run-inventory', post_inventory)
+    # Book Operations (механические — под замком от параллельного запуска)
+    app.router.add_post('/api/issue', with_mech_lock(post_issue))
+    app.router.add_post('/api/return', with_mech_lock(post_return))
+    # Киоск-алиасы (паритет с Express)
+    app.router.add_post('/api/book/issue', with_mech_lock(post_book_issue))
+    app.router.add_post('/api/book/return', with_mech_lock(post_book_return))
+    app.router.add_get('/api/books', get_books)
+    app.router.add_get('/api/users', get_users)
+    app.router.add_get('/api/rfid-readers', get_rfid_readers)
+    app.router.add_post('/api/auth/logout', post_auth_logout)
+    app.router.add_post('/api/emergency-stop', post_emergency_stop)
+    app.router.add_post('/api/shutter/close-all', post_shutter_close_all)
+    app.router.add_post('/api/maintenance', post_maintenance)
+    app.router.add_post('/api/test/tray', post_test_tray)
+    app.router.add_post('/api/test/servo', post_test_servo)
+    app.router.add_post('/api/calibration/test-suite', post_calibration_test_suite)
+    app.router.add_post('/api/calibration/test/{name}', post_calibration_test_single)
+    # Мастер калибровки: клиент зовёт /api/calibration/wizard/*, исторические
+    # маршруты /api/wizard/* остаются для совместимости
+    app.router.add_post('/api/calibration/wizard/kinematics/start', post_wizard_kinematics_start)
+    app.router.add_post('/api/calibration/wizard/kinematics/step', post_wizard_kinematics_step)
+    app.router.add_post('/api/calibration/wizard/points10/start', post_wizard_points10_start)
+    app.router.add_post('/api/calibration/wizard/points10/save', post_wizard_points10_save)
+    app.router.add_post('/api/calibration/wizard/move', post_wizard_move)
+    app.router.add_post('/api/calibration/wizard/grab/start', post_wizard_grab_start)
+    app.router.add_post('/api/calibration/wizard/grab/adjust', post_wizard_grab_adjust)
+    app.router.add_post('/api/calibration/wizard/grab/test', post_wizard_grab_test)
+    app.router.add_post('/api/calibration/wizard/exit', post_wizard_exit)
+    app.router.add_get('/api/calibration/blocked-cells', get_blocked_cells)
+    app.router.add_post('/api/calibration/blocked-cells', post_blocked_cells)
+    app.router.add_post('/api/calibration/quick-test', post_quick_test)
+    app.router.add_post('/api/load-book', with_mech_lock(post_load_book))
+    app.router.add_post('/api/extract', with_mech_lock(post_extract))
+    app.router.add_post('/api/extract-all', with_mech_lock(post_extract_all))
+    app.router.add_post('/api/run-inventory', with_mech_lock(post_inventory))
     
     # Mechanics
     app.router.add_post('/api/init', post_init)

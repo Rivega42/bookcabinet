@@ -1,5 +1,16 @@
 """
-Модели данных для SQLite
+Модели данных для SQLite (схема v2, 2026-06-12).
+
+Статус книги отражает физику:
+  in_cabinet           — лежит в ячейке (cell_id NOT NULL)
+  issued               — на руках у читателя (cell_id NULL)
+  awaiting_extraction  — возвращена читателем, лежит в ячейке, ждёт библиотекаря (cell_id NOT NULL)
+  extracted            — вне шкафа, у библиотекаря (cell_id NULL)
+
+Резерв (reserved_by) — ортогональное поле, НЕ статус.
+Состояние ячейки (empty/occupied/blocked, needs_extraction) — вычисляется
+из books через представление cells_view; в таблице cells хранится только
+физическая конфигурация (row, x, y, blocked).
 """
 from dataclasses import dataclass, field
 from typing import Optional, List
@@ -8,6 +19,7 @@ from enum import Enum
 
 
 class CellStatus(str, Enum):
+    """Значения вычисляемого поля cells_view.status."""
     EMPTY = 'empty'
     OCCUPIED = 'occupied'
     BLOCKED = 'blocked'
@@ -15,9 +27,14 @@ class CellStatus(str, Enum):
 
 class BookStatus(str, Enum):
     IN_CABINET = 'in_cabinet'
-    RESERVED = 'reserved'
     ISSUED = 'issued'
-    RETURNED = 'returned'
+    AWAITING_EXTRACTION = 'awaiting_extraction'
+    EXTRACTED = 'extracted'
+
+    @classmethod
+    def in_cell(cls) -> tuple:
+        """Статусы, при которых книга физически лежит в ячейке."""
+        return (cls.IN_CABINET.value, cls.AWAITING_EXTRACTION.value)
 
 
 class UserRole(str, Enum):
@@ -34,6 +51,7 @@ class OperationType(str, Enum):
     RETURN = 'RETURN'
     LOAD = 'LOAD'
     EXTRACT = 'EXTRACT'
+    INVENTORY = 'INVENTORY'
 
 
 class OperationResult(str, Enum):
@@ -47,11 +65,7 @@ class Cell:
     row: str
     x: int
     y: int
-    status: CellStatus = CellStatus.EMPTY
-    book_rfid: Optional[str] = None
-    book_title: Optional[str] = None
-    reserved_for: Optional[str] = None
-    needs_extraction: bool = False
+    blocked: bool = False
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
 
 
@@ -62,7 +76,7 @@ class Book:
     title: str
     author: Optional[str] = None
     isbn: Optional[str] = None
-    status: BookStatus = BookStatus.IN_CABINET
+    status: BookStatus = BookStatus.EXTRACTED
     cell_id: Optional[int] = None
     reserved_by: Optional[str] = None
     issued_to: Optional[str] = None

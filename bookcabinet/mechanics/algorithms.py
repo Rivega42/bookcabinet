@@ -130,18 +130,27 @@ class Algorithms:
         self.progress_callback = progress
         self.error_callback = error
     
+    @staticmethod
+    async def _call_cb(cb, payload):
+        """Колбэк может быть и sync (bridge), и async (websocket) —
+        раньше await на результате sync-колбэка ронял операцию после
+        первого же progress-события."""
+        result = cb(payload)
+        if asyncio.iscoroutine(result):
+            await result
+
     async def _emit_progress(self, step: int, total: int, message: str):
         if self.progress_callback:
-            await self.progress_callback({
+            await self._call_cb(self.progress_callback, {
                 'step': step,
                 'total': total,
                 'message': message,
                 'operation': self.current_operation,
             })
-    
+
     async def _emit_error(self, code: int, message: str):
         if self.error_callback:
-            await self.error_callback({
+            await self._call_cb(self.error_callback, {
                 'code': code,
                 'message': message,
                 'operation': self.current_operation,

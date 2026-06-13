@@ -281,10 +281,19 @@ class Motors:
             self.position["tray"] = 0
             return True
 
+        # GPIO20 (SENSOR_TRAY_BEGIN) сильно шумит от помех мотора лотка.
+        # Полевые сессии (2026-04-16): фильтра 1000 мкс мало, нужен 5000 мкс.
+        tray_begin_pin = GPIO_PINS["SENSOR_TRAY_BEGIN"]
+        try:
+            self.pi.set_glitch_filter(tray_begin_pin, 5000)
+        except Exception:
+            pass
+
         # Лоток назад (DIR=HIGH = назад по config)
         self.pi.write(GPIO_PINS["TRAY_DIR"], 1)
         time.sleep(0.01)
         total = 0
+        reached = False
         # Debounce для SENSOR_TRAY_BEGIN (pin 20 - дребезг!)
         stable_count = 0
         while stable_count < 3 and total < MAX_STEPS:
@@ -295,6 +304,12 @@ class Motors:
             else:
                 stable_count = 0
             await asyncio.sleep(0)
+
+        reached = stable_count >= 3
+        if not reached:
+            # Концевик не достигнут за MAX_STEPS — НЕ устанавливаем ноль вслепую.
+            print(f"[homing] ERROR: лоток не дошёл до концевика BACK за {MAX_STEPS} шагов")
+            return False
 
         self.position["tray"] = 0
         return True

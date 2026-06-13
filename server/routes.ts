@@ -134,7 +134,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     
     const startDaemon = () => {
       const daemon = spawn('sudo', ['python3', daemonPath], { stdio: ['ignore', 'pipe', 'pipe'] });
-      
+
+      daemon.on('error', (err: Error) => {
+        console.error('[auth-daemon] failed to start:', err.message);
+      });
+
       daemon.stdout.on('data', (data: Buffer) => {
         data.toString().split('\n').filter(Boolean).forEach(line => {
           try {
@@ -156,7 +160,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     };
 
-    setTimeout(startDaemon, 3000);
+    // Демон требует sudo + GPIO — запускается только на Pi.
+    if (process.platform === 'linux') {
+      setTimeout(startDaemon, 3000);
+    }
   }
 
   // Ручное управление шторками

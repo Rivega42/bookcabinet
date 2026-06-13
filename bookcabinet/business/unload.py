@@ -35,34 +35,16 @@ class UnloadService:
         await algorithms.give_shelf(cell['row'], cell['x'], cell['y'])
         
         book = db.get_book_by_rfid(cell['book_rfid']) if cell.get('book_rfid') else None
-        
-        if book:
-            db.update_book(book['id'],
-                status='extracted',
-                cell_id=None
-            )
-        
+
         if cell.get('book_rfid'):
             verification = await self.irbis.verify_book_for_extraction(cell['book_rfid'])
             if verification.get('action'):
                 db.add_system_log('INFO', f"ИРБИС: {verification['action']}", 'unload')
-        
-        db.update_cell(cell_id,
-            status='empty',
-            book_rfid=None,
-            book_title=None,
-            reserved_for=None,
-            needs_extraction=False
-        )
-        
+
+        # Атомарно: книга → extracted (вне шкафа) + журнал (db v2)
         duration = int((datetime.now() - start_time).total_seconds() * 1000)
-        db.log_operation('EXTRACT',
-            cell_row=cell['row'],
-            cell_x=cell['x'],
-            cell_y=cell['y'],
-            book_rfid=cell.get('book_rfid'),
-            duration_ms=duration
-        )
+        db.extract_book_tx(book['id'] if book else None, cell=cell,
+            book_rfid=cell.get('book_rfid'), duration_ms=duration)
         
         title = cell.get('book_title', 'книга')
         db.add_system_log('INFO', f"Изъята книга: {title}", 'unload')

@@ -1,0 +1,35 @@
+# Dev-стенд BookCabinet в мок-режиме (без железа).
+# Node + Python в одном образе: Express спавнит bookcabinet/bridge.py
+# субпроцессом — та же топология, что на Pi.
+FROM node:22-bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 python3-venv curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Python-зависимости в venv (bookworm не даёт ставить в системный python)
+RUN python3 -m venv /opt/venv \
+    && /opt/venv/bin/pip install --no-cache-dir aiohttp alembic pyserial
+
+# Node-зависимости — отдельным слоем для кеша
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY . .
+
+ENV NODE_ENV=development \
+    MOCK_MODE=true \
+    IRBIS_MOCK=true \
+    HOST=0.0.0.0 \
+    PORT=5000 \
+    PYTHON_BIN=/opt/venv/bin/python \
+    DATABASE_PATH=/data/shelf_data.db
+
+EXPOSE 5000
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s \
+    CMD curl -sf http://localhost:5000/api/status || exit 1
+
+CMD ["npm", "run", "dev"]

@@ -23,7 +23,6 @@ export default defineConfig({
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),
       "@shared": path.resolve(import.meta.dirname, "shared"),
-      "@assets": path.resolve(import.meta.dirname, "attached_assets"),
     },
   },
   root: path.resolve(import.meta.dirname, "client"),
@@ -40,9 +39,7 @@ export default defineConfig({
           "radix-ui": [
             "@radix-ui/react-dialog",
             "@radix-ui/react-toast",
-            "@radix-ui/react-dropdown-menu",
             "@radix-ui/react-tabs",
-            "@radix-ui/react-select",
             "@radix-ui/react-progress",
             "@radix-ui/react-tooltip",
             "@radix-ui/react-label",
@@ -59,6 +56,18 @@ export default defineConfig({
     fs: {
       strict: true,
       deny: ["**/.*"],
+    },
+    // Дев-режим против python-бэкенда: `vite` (порт 5173) проксирует
+    // API и WebSocket на aiohttp (порт из VITE_API_TARGET или 5000).
+    proxy: {
+      "/api": {
+        target: process.env.VITE_API_TARGET || "http://localhost:5000",
+        changeOrigin: true,
+      },
+      "/ws": {
+        target: process.env.VITE_API_TARGET || "http://localhost:5000",
+        ws: true,
+      },
     },
   },
 });

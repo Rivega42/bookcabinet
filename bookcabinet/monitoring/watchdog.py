@@ -238,7 +238,16 @@ class StartupRecovery:
     """Checks hardware state on startup and recovers if needed.
 
     Called once during service startup to ensure the cabinet is in a
-    known-safe state: shutters closed, tray retracted, position homed.
+    known-safe state: shutters closed, carriage homed, tray sensor-homed.
+
+    Порядок важен (механика, Роман 2026-06-13): лоток хомится по датчику
+    ТОЛЬКО когда каретка в home (x=0,y=0). Поэтому:
+      1. шторки закрыть;
+      2. замки выставить в 500 мкс (open) и УДЕРЖАТЬ — иначе сервы дребезжат
+         («reset locks before homing»);
+      3. грубо втянуть лоток (слепо) — лишь чтобы освободить путь каретке;
+      4. хоминг XY → каретка в 0,0;
+      5. ТОЧНЫЙ sensor-хоминг лотка к концевику BACK (истинный ноль лотка).
     """
 
     async def check_and_recover(self) -> dict:
@@ -246,7 +255,8 @@ class StartupRecovery:
 
         Returns dict summarizing what was done.
         """
-        results = {'shutters': None, 'tray': None, 'homing': None}
+        results = {'shutters': None, 'locks': None, 'tray': None,
+                   'homing': None, 'tray_homing': None}
 
         try:
             from ..hardware.shutters import shutters
@@ -260,13 +270,27 @@ class StartupRecovery:
             db.add_system_log('ERROR', f'Startup recovery shutters: {e}', 'watchdog')
 
         try:
+            from ..hardware.servos import servos
+
+            # Замки → open (500 мкс) и УДЕРЖИВАТЬ. Иначе сервоприводы дребезжат
+            # (Роман 2026-06-13: pigs s 12 500 / s 13 500). set_angle(0) = 500 мкс,
+            # PWM не снимается. Делать ДО хоминга («reset locks before homing»).
+            await servos.open_lock('lock1')
+            await servos.open_lock('lock2')
+            results['locks'] = 'reset (500us, held)'
+        except Exception as e:
+            results['locks'] = f'error: {e}'
+            db.add_system_log('ERROR', f'Startup recovery locks: {e}', 'watchdog')
+
+        try:
             from ..hardware.sensors import sensors
             from ..hardware.motors import motors
 
-            # Check tray — retract if extended
+            # Грубое (слепое) втягивание лотка — только чтобы освободить путь
+            # каретке. Истинный ноль лотка устанавливается ниже sensor-хомингом.
             if not sensors.is_tray_retracted():
                 await motors.retract_tray()
-                results['tray'] = 'retracted'
+                results['tray'] = 'retracted (coarse)'
             else:
                 results['tray'] = 'already_retracted'
         except Exception as e:
@@ -277,12 +301,28 @@ class StartupRecovery:
             from ..hardware.sensors import sensors
             from ..hardware.motors import motors
 
-            # Home if needed
+            # Хоминг каретки XY → x=0, y=0 (необходимо ДО хоминга лотка)
             result = await motors.home_with_sensors(sensors)
             results['homing'] = 'ok' if result else 'failed'
         except Exception as e:
             results['homing'] = f'error: {e}'
             db.add_system_log('ERROR', f'Startup recovery homing: {e}', 'watchdog')
+
+        try:
+            from ..hardware.sensors import sensors
+            from ..hardware.motors import motors
+
+            # Точный sensor-хоминг лотка к концевику BACK. Лоток можно хомить
+            # ТОЛЬКО при каретке в home (Роман 2026-06-13), поэтому строго после
+            # успешного хоминга XY. Раньше старт делал лишь слепой retract.
+            if results['homing'] == 'ok':
+                tray_ok = await motors.home_tray_with_sensor(sensors)
+                results['tray_homing'] = 'ok' if tray_ok else 'failed'
+            else:
+                results['tray_homing'] = 'skipped (XY homing not ok)'
+        except Exception as e:
+            results['tray_homing'] = f'error: {e}'
+            db.add_system_log('ERROR', f'Startup recovery tray homing: {e}', 'watchdog')
 
         db.add_system_log(
             'INFO',

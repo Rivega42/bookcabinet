@@ -17,3 +17,5 @@ sensor_calibration.json
 backups/
 patch_*.py
 x_*_debug*.py
+.venv/
+.local-dev/
