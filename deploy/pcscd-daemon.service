@@ -1,0 +1,28 @@
+# Постоянный pcscd для NFC-считывателя ACR1281 (PC/SC).
+#
+# Зачем отдельный юнит, а не штатные pcscd.service/.socket:
+# на этом шкафу штатные используют socket-активацию с --auto-exit; при частых
+# обращениях claim USB у ACR1281 "дребезжит" (readers() то 3, то 0), а если
+# параллельно активны и .service, и .socket — два pcscd дерутся → LIBUSB_ERROR_BUSY.
+# Этот юнит держит ОДИН постоянный pcscd, заклеймивший ридер заранее.
+#
+# Установка (на устройстве):
+#   sudo cp deploy/pcscd-daemon.service /etc/systemd/system/
+#   sudo systemctl disable --now pcscd.service pcscd.socket
+#   sudo systemctl daemon-reload && sudo systemctl enable --now pcscd-daemon.service
+# Проверка: python3 -c "from smartcard.System import readers; print(readers())" → видит ACR.
+[Unit]
+Description=PC/SC Smart Card Daemon (direct)
+After=network.target
+
+[Service]
+Type=forking
+# Подождать поднятия USB и снять устаревший comm-сокет от прежнего pcscd
+ExecStartPre=/bin/sleep 5
+ExecStartPre=/bin/rm -f /run/pcscd/pcscd.comm
+ExecStart=/usr/sbin/pcscd
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
