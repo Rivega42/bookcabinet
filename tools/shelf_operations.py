@@ -17,10 +17,6 @@ import time
 import sys
 import os
 
-# TODO (#75): integrate position.save_pos(x, y) after carriage moves.
-# shelf_operations.py only controls tray depth movement, not XY carriage,
-# so there is no (x, y) to persist here currently.
-
 # === КОНСТАНТЫ ===
 TRAY_STEP = 18
 TRAY_DIR = 27
@@ -396,16 +392,213 @@ def rear_to_front():
     lock_grab(LOCK_FRONT)
     
     print("Step 8: Tray -> FRONT endstop")
-    tray_to_endstop(ENDSTOP_FRONT)
+
+
+
+
+
+
+
+
+
+
+
+# === V2: ПРАВИЛЬНАЯ ЛОГИКА ===
+
+# Калибровочные константы (TODO: подобрать)
+FRONT_TO_REAR_STEP4 = 4500   # от FRONT концевика для переднего замка
+FRONT_TO_REAR_STEP6 = 12600   # от BACK концевика для заднего замка
+REAR_TO_FRONT_STEP4 = 5000   # от BACK концевика для заднего замка  
+REAR_TO_FRONT_STEP6 = 5000   # от FRONT концевика для переднего замка
+
+step_counter = 0
+
+def step(action, detail=""):
+    global step_counter
+    step_counter += 1
+    print(f"\n[{step_counter}] {action}")
+    if detail:
+        print(f"    {detail}")
+
+def wait():
+    global step_counter
+    input(f"  [{step_counter}] OK — Enter...")
+
+
+def return_front_v2(from_depth=1):
+    global step_counter
+    step_counter = 0
     
-    print("Step 9: Front lock -> RELEASE")
-    lock_release(LOCK_FRONT, strong=True)
+    print(f"\n{'='*50}")
+    print(f"RETURN FRONT v2 (from_depth={from_depth})")
+    print(f"{'='*50}")
+    setup()
     
-    print("Step 10: Tray -> CENTER")
-    tray_move(TRAY_CENTER, 1)
+    if from_depth == 1:
+        # front → front: держит ЗАДНИЙ замок
+        step("tray_to_endstop(FRONT)", "GPIO 7")
+        tray_to_endstop(ENDSTOP_FRONT)
+        wait()
+        
+        step("lock_release(REAR)", "GPIO 13 -> 0")
+        lock_release(LOCK_REAR)
+        wait()
+        
+        step("tray_move(12600, BACK)", "фикс")
+        tray_move(LOCK_DISTANCE, 1)
+        wait()
+        
+        step("lock_grab(FRONT)", "GPIO 12")
+        lock_grab(LOCK_FRONT)
+        wait()
+        
+        step("tray_to_endstop(FRONT)", "GPIO 7")
+        tray_to_endstop(ENDSTOP_FRONT)
+        wait()
+        
+        step("lock_release(FRONT)", "GPIO 12 -> 0")
+        lock_release(LOCK_FRONT, strong=True)
+        wait()
+        
+        step("tray_move(CENTER)", "11300")
+        tray_move(TRAY_CENTER, 1)
+        wait()
+    else:
+        # rear → front: держит ПЕРЕДНИЙ замок
+        step("lock_release(FRONT)", "GPIO 12 -> 0")
+        lock_release(LOCK_FRONT)
+        wait()
+        
+        step("tray_to_endstop(BACK)", "GPIO 20")
+        tray_to_endstop(ENDSTOP_BACK)
+        wait()
+        
+        step("tray_move(STEP4, FRONT)", f"{REAR_TO_FRONT_STEP4} шагов")
+        tray_move(REAR_TO_FRONT_STEP4, 0)
+        wait()
+        
+        step("lock_grab(REAR)", "GPIO 13")
+        lock_grab(LOCK_REAR)
+        wait()
+        
+        step("tray_to_endstop(FRONT)", "GPIO 7")
+        tray_to_endstop(ENDSTOP_FRONT)
+        wait()
+        
+        step("lock_release(REAR)", "GPIO 13 -> 0")
+        lock_release(LOCK_REAR)
+        wait()
+        
+        step("tray_move(STEP6, BACK)", f"{REAR_TO_FRONT_STEP6} шагов")
+        tray_move(REAR_TO_FRONT_STEP6, 1)
+        wait()
+        
+        step("lock_grab(FRONT)", "GPIO 12")
+        lock_grab(LOCK_FRONT)
+        wait()
+        
+        step("tray_to_endstop(FRONT)", "GPIO 7")
+        tray_to_endstop(ENDSTOP_FRONT)
+        wait()
+        
+        step("lock_release(FRONT)", "GPIO 12 -> 0")
+        lock_release(LOCK_FRONT, strong=True)
+        wait()
+        
+        step("tray_move(CENTER)", "11300")
+        tray_move(TRAY_CENTER, 1)
+        wait()
     
     cleanup()
-    print("=== DONE: Shelf moved from rear to front ===")
+    print("DONE")
+
+
+def return_rear_v2(from_depth=2):
+    global step_counter
+    step_counter = 0
+    
+    print(f"\n{'='*50}")
+    print(f"RETURN REAR v2 (from_depth={from_depth})")
+    print(f"{'='*50}")
+    setup()
+    
+    if from_depth == 2:
+        # rear → rear: держит ПЕРЕДНИЙ замок
+        step("tray_to_endstop(BACK)", "GPIO 20")
+        tray_to_endstop(ENDSTOP_BACK)
+        wait()
+        
+        step("lock_release(FRONT)", "GPIO 12 -> 0")
+        lock_release(LOCK_FRONT)
+        wait()
+        
+        step("tray_move(12600, FRONT)", "фикс")
+        tray_move(LOCK_DISTANCE, 0)
+        wait()
+        
+        step("lock_grab(REAR)", "GPIO 13")
+        lock_grab(LOCK_REAR)
+        wait()
+        
+        step("tray_to_endstop(BACK)", "GPIO 20")
+        tray_to_endstop(ENDSTOP_BACK)
+        wait()
+        
+        step("lock_release(REAR)", "GPIO 13 -> 0")
+        lock_release(LOCK_REAR, strong=True)
+        wait()
+        
+        step("tray_move(CENTER)", "11300")
+        tray_move(TRAY_CENTER, 0)
+        wait()
+    else:
+        # front → rear: держит ЗАДНИЙ замок — НОВАЯ ЛОГИКА
+        step("lock_release(REAR)", "отпускаем задний")
+        lock_release(LOCK_REAR)
+        wait()
+        
+        step("tray_to_endstop(FRONT)", "ловим позицию")
+        tray_to_endstop(ENDSTOP_FRONT)
+        wait()
+        
+        step("tray_move(STEP4, BACK)", f"{FRONT_TO_REAR_STEP4} шагов (калибр)")
+        tray_move(FRONT_TO_REAR_STEP4, 1)
+        wait()
+        
+        step("lock_grab(FRONT)", "поднимаем передний")
+        lock_grab(LOCK_FRONT)
+        wait()
+        
+        step("tray_to_endstop(BACK)", "едем к заднему")
+        tray_to_endstop(ENDSTOP_BACK)
+        wait()
+        
+        step("lock_release(FRONT)", "опускаем передний")
+        lock_release(LOCK_FRONT)
+        wait()
+        
+        step("tray_move(STEP6, FRONT)", f"{FRONT_TO_REAR_STEP6} шагов (калибр)")
+        tray_move(FRONT_TO_REAR_STEP6, 0)
+        wait()
+        
+        step("lock_grab(REAR)", "поднимаем задний")
+        lock_grab(LOCK_REAR)
+        wait()
+        
+        step("tray_to_endstop(BACK)", "задвигаем полку")
+        tray_to_endstop(ENDSTOP_BACK)
+        wait()
+        
+        step("lock_release(REAR)", "полка в ячейке")
+        lock_release(LOCK_REAR, strong=True)
+        wait()
+        
+        step("tray_move(CENTER)", "исходная")
+        tray_move(TRAY_CENTER, 0)
+        wait()
+    
+    cleanup()
+    print("DONE")
 
 # === MAIN ===
 def main():
@@ -422,6 +615,8 @@ def main():
         "return_front": return_front,
         "front_to_rear": front_to_rear,
         "rear_to_front": rear_to_front,
+        "return_front_v2": return_front_v2,
+        "return_rear_v2": return_rear_v2,
     }
     
     if cmd not in commands:
