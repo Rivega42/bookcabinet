@@ -135,16 +135,18 @@
 
 ## RFID-считыватели
 
-| Устройство | Интерфейс | Порт | Скорость | Роль | Статус в коде |
+Карта подтверждена на шкафу 2026-06-13 (все три работают в боевом сервисе):
+
+| Устройство | Интерфейс | Порт (USB) | tty | Роль | Статус |
 |---|---|---|---|---|---|
-| ACR1281U-C | USB PC/SC (pcscd) | через `smartcard` | — | NFC: читательские билеты (читатель И библиотекарь) | 🟢 подключён (`unified_card_reader`) |
-| IQRFID-5102 | USB serial CP2102 | `/dev/rfid_uhf_card` → ttyUSB1 | 57600 | UHF: карты ЕКП | 🟢 подключён (`unified_card_reader`) |
-| RRU9816 | USB serial | `/dev/rfid_book` → ttyUSB2 (config; старый док: ttyUSB0@115200) | 57600 | UHF: метки книг | 🟡 драйвер есть (`hardware/rru9816_driver.py`), в живой опрос не подключён; **нужен в проде — подключить** (Роман, 2026-06-12) |
+| ACR1281U-C | USB PC/SC | через `pcscd-daemon.service` | — | NFC: читательские билеты | 🟢 работает |
+| IQRFID-5102 | USB serial CP2102 | `1-1.3.1.2` → `/dev/rfid_uhf_card` | ttyUSB1 | UHF: карты ЕКП | 🟢 работает |
+| RRU9816 | USB serial CP2102 | `1-1.3.1.3` → `/dev/rfid_book` | ttyUSB0 | UHF: метки книг | 🟢 подключается (в `/api/rfid-readers` показывается False — косметика) |
 
-> По словам Романа (2026-06-12): физически на шкафу стоят **2 одинаковых считывателя и 1 другой** — состав не совпадает с таблицей выше один-в-один. Сверить модели/порты при доступе к RPi.
-
-- Роль читатель/библиотекарь определяется не считывателем, а **полем 50 в ИРБИС** (категория: «библиотекарь»/«сотрудник» → librarian, «администратор» → admin) — `irbis/client.py`.
-- udev-правила (`bookcabinet/udev/`): стабильные симлинки `/dev/rfid_uhf_card`, `/dev/rfid_book` по физическому USB-порту.
+- Оба UHF — одинаковые CP2102 (ID_SERIAL=0001), различимы ТОЛЬКО по USB-порту → udev по DEVPATH. При переткивании порт сменится (см. `udevadm info -q property -n /dev/ttyUSBx`).
+- **NFC через постоянный `pcscd-daemon.service`** (Type=forking), а штатные `pcscd.service`/`pcscd.socket` — ОТКЛЮЧЕНЫ: их `--auto-exit` + параллельный daemon давали два pcscd → LIBUSB_ERROR_BUSY и NFC не вставал. Эталон юнита: `deploy/pcscd-daemon.service`.
+- Роль читатель/библиотекарь определяется не считывателем, а **полем 50 в ИРБИС** — `irbis/client.py`.
+- udev-правила (`bookcabinet/udev/`): стабильные симлинки `/dev/rfid_uhf_card`, `/dev/rfid_book` по USB-порту.
 - Протокол IQRFID-5102: фрейм `[LEN][ADR][CMD][DATA][CRC_L][CRC_H]`, семейство команд 0xA0/инвентарь 0x01, CRC-16 poly 0x8408 LSB-first.
 - Протокол RRU9816: CRC-16/MODBUS (poly 0xA001).
 - Поллинг карт: интервал 0.3 с, debounce 800 мс; EPC UHF-карты усечён до 24 hex-символов.
