@@ -228,8 +228,8 @@ async def get_diagnostics(request):
     nfc_connected = card_status.get('nfc_connected', False)
     uhf_card_connected = card_status.get('uhf_connected', False)
     
-    # TODO: добавить реальный статус book_reader (RRU9816)
-    book_reader_connected = True  # Пока заглушка
+    # Реальный статус книжного ридера RRU9816 (mock_mode → True; на железе — наличие serial)
+    book_reader_connected = book_reader.get_status().get('connected', False)
     
     return json_response({
         'sensors': sensors.read_all(),
@@ -585,6 +585,80 @@ async def get_rfid_readers(request):
         {'id': 'book', 'name': 'RRU9816', 'type': 'UHF 900MHz',
          'description': 'Метки книг', 'connected': book_connected},
     ])
+
+
+# Считыватели для теста: id → (вид события, фильтр по source, человекочитаемое имя)
+_RFID_TEST_READERS = {
+    'nfc':      ('card', 'nfc', 'ACR1281U-C'),
+    'uhf_card': ('card', 'uhf', 'IQRFID-5102'),
+    'book':     ('tag',  None,  'RRU9816'),
+}
+
+
+async def get_rfid_test(request):
+    """SSE-консоль теста считывателя (/api/rfid-test/{id}).
+
+    Аддитивно: подписывается на тот же поток broadcast-событий, что идёт в
+    киоск (card_detected / book_read), и ретранслирует его как Server-Sent
+    Events для админского диалога. Не трогает живые callback'и ридеров —
+    поэтому боевой опрос карт/книг во время теста продолжает работать.
+    """
+    reader_id = request.match_info.get('id', '')
+
+    resp = web.StreamResponse(
+        status=200,
+        headers={
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',  # nginx: не буферизовать SSE
+        },
+    )
+    await resp.prepare(request)
+
+    async def send(obj):
+        await resp.write(f'data: {json.dumps(obj, ensure_ascii=False)}\n\n'.encode('utf-8'))
+
+    if reader_id not in _RFID_TEST_READERS:
+        await send({'type': 'error', 'message': f'Неизвестный считыватель: {reader_id}'})
+        await send({'type': 'done', 'message': 'Готово'})
+        return resp
+
+    kind, source_filter, reader_name = _RFID_TEST_READERS[reader_id]
+    duration = 30.0  # сколько секунд слушаем поднесённую карту/метку
+    target = 'карту' if kind == 'card' else 'метку книги'
+    await send({'type': 'info',
+                'message': f'Тест {reader_name}: поднесите {target} (до {int(duration)} c)…'})
+
+    queue = ws_handler.subscribe()
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + duration
+    try:
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            try:
+                msg = await asyncio.wait_for(queue.get(), timeout=min(remaining, 1.0))
+            except asyncio.TimeoutError:
+                await resp.write(b': keepalive\n\n')  # держим соединение живым
+                continue
+
+            mtype = msg.get('type')
+            if kind == 'card' and mtype == 'card_detected':
+                if source_filter is None or msg.get('source') == source_filter:
+                    await send({'type': 'card', 'uid': msg.get('uid'), 'reader': reader_name})
+            elif kind == 'tag' and mtype == 'book_read':
+                epc = (msg.get('data') or {}).get('rfid')
+                if epc:
+                    await send({'type': 'tag', 'epc': epc, 'reader': reader_name})
+
+        await send({'type': 'done', 'message': 'Тест завершён'})
+    except (asyncio.CancelledError, ConnectionResetError):
+        pass
+    finally:
+        ws_handler.unsubscribe(queue)
+    return resp
 
 
 async def post_load_book(request):
@@ -1597,6 +1671,7 @@ def setup_routes(app: web.Application):
     app.router.add_get('/api/books', get_books)
     app.router.add_get('/api/users', get_users)
     app.router.add_get('/api/rfid-readers', get_rfid_readers)
+    app.router.add_get('/api/rfid-test/{id}', get_rfid_test)
     app.router.add_post('/api/auth/logout', post_auth_logout)
     app.router.add_post('/api/emergency-stop', post_emergency_stop)
     app.router.add_post('/api/shutter/close-all', post_shutter_close_all)

@@ -176,7 +176,20 @@ Pi 3; целевой бэкенд aiohttp (✅ выложен); RRU9816 нуже
   (python-бэкенд, инструкция переключения в шапке юнита).
 - Telegram-алёрты на сбои выдачи/возврата и аварийный стоп (`_alert` в api_routes).
 
+Сделано в части 4 — безопасные флоу-фиксы (2026-06-13, ветка feat/flow-fixes):
+- Аварийный стоп закрывает шторки: `algorithms.stop()` → `shutters.close_all_immediate()`
+  (синхронно, без await) — окно не остаётся открытым при аварии.
+- SSE `/api/rfid-test/{id}` теперь есть и в aiohttp: подписка на внутренний поток
+  broadcast-событий (`ws_handler.subscribe()`), ретрансляция `card_detected`/`book_read`
+  как Server-Sent Events. Живые callback'и ридеров не трогаются — боевой опрос во время теста идёт.
+- Статус книжного ридера в `/api/card-readers/status` — реальный (`book_reader.get_status()`),
+  а не заглушка `True`.
+- Опрос книжного ридера RRU9816 подключён в `main.py` (`start_book_polling`): метка книги в
+  окне → событие `book_read` по WS → киоск авто-стартует возврат (`ReaderScreens.tsx`).
+  В моке поле пустое (спама нет), `start_polling` дедуплицирует метки.
+
 Осталось:
-- SSE `/api/rfid-test/{readerId}` (консоль RFID-теста в админке) — пока только на Express.
+- ⚠️ Сухой прогон выдачи/возврата на железе ещё не делался — авто-возврат по `book_read`
+  и аварийный стоп проверены только в моке/юнит-тестами.
 - Снять Express с прода (после проверки на Pi): переключить юнит на bookcabinet-api.service, Node — в `_attic/`.
 - Auth/sessions: в aiohttp та же синглтон-модель, что в Express (current_user в auth_service); для локального киоска достаточно, но требует ревью на этапе безопасности.

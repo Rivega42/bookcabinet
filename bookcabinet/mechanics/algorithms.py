@@ -489,16 +489,61 @@ class Algorithms:
             self.state = 'error'
             return False
     
-    async def wait_for_user(self, timeout_ms: int = None) -> bool:
-        """Ожидание действия пользователя"""
+    async def wait_for_user(self, timeout_ms: int = None, book_rfid: str = None) -> bool:
+        """Ожидание, пока пользователь/библиотекарь заберёт книгу из окна.
+
+        Если передан book_rfid и не мок — ждём, пока RRU9816 перестанет видеть метку
+        этой книги (книгу физически вынули). Логика безопасная:
+          - пока метку НИ РАЗУ не увидели (ридер выключен / не добивает до окна / мок),
+            ведём себя как раньше — просто досыпаем до таймаута, ничего не «детектим»;
+          - таймаут всегда верхняя граница (железное правило: таймаут обязателен).
+        """
         timeout = timeout_ms or TIMEOUTS['user_wait']
-        await asyncio.sleep(timeout / 1000)
+
+        if not book_rfid or MOCK_MODE:
+            await asyncio.sleep(timeout / 1000)
+            return True
+
+        try:
+            from ..rfid.book_reader import book_reader
+        except Exception:
+            await asyncio.sleep(timeout / 1000)
+            return True
+
+        POLL = 0.3              # период проверки присутствия метки, с
+        STABLE_ABSENT = 3       # столько подряд «нет метки» = книгу забрали (анти-дребезг UHF)
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + timeout / 1000
+        seen = False
+        absent = 0
+
+        while loop.time() < deadline:
+            if self._stop_requested:
+                return True
+            present = book_reader.is_present(book_rfid)
+            if present:
+                seen = True
+                absent = 0
+            elif seen:
+                absent += 1
+                if absent >= STABLE_ABSENT:
+                    return True  # метка пропала после того как была видна → книгу забрали
+            await asyncio.sleep(POLL)
+
+        # Таймаут: либо метку так и не увидели (фоллбек на старое поведение),
+        # либо пользователь не забрал — в любом случае не висим, идём дальше.
         return True
     
     def stop(self):
         """Аварийная остановка"""
         self._stop_requested = True
         motors.stop()
+        # Безопасность: при аварии шторки не оставляем открытыми (рука/книга в окне).
+        # stop() синхронный — закрываем напрямую, без await.
+        try:
+            shutters.close_all_immediate()
+        except Exception:
+            pass
         self.state = 'stopped'
     
     def get_state(self) -> Dict[str, Any]:

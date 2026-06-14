@@ -11,6 +11,18 @@ class WebSocketHandler:
     def __init__(self):
         self.clients: Set[web.WebSocketResponse] = set()
         self._lock = asyncio.Lock()
+        # Внутренние подписчики на поток broadcast-событий (SSE-диагностика и т.п.)
+        self.subscribers: Set[asyncio.Queue] = set()
+
+    def subscribe(self) -> asyncio.Queue:
+        """Подписка на поток broadcast-событий внутри процесса (для SSE).
+        Возвращает очередь; обязательно вызвать unsubscribe() по завершении."""
+        q: asyncio.Queue = asyncio.Queue(maxsize=100)
+        self.subscribers.add(q)
+        return q
+
+    def unsubscribe(self, q: asyncio.Queue):
+        self.subscribers.discard(q)
     
     async def handle(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
@@ -174,9 +186,16 @@ class WebSocketHandler:
             await ws.send_json({'type': 'error', 'message': str(e)})
     
     async def broadcast(self, message: Dict[str, Any]):
+        # Внутренние подписчики (SSE-диагностика) — best-effort, не блокируем поток
+        for q in list(self.subscribers):
+            try:
+                q.put_nowait(message)
+            except asyncio.QueueFull:
+                pass
+
         if not self.clients:
             return
-        
+
         data = json.dumps(message)
         async with self._lock:
             dead_clients = set()

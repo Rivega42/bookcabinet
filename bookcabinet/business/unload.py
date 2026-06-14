@@ -30,8 +30,9 @@ class UnloadService:
         if not success:
             return {'success': False, 'error': 'Ошибка механики шкафа'}
         
-        await algorithms.wait_for_user()
-        
+        # Детект «книгу забрали» по RRU9816 (метка книги перестала видеться в окне)
+        await algorithms.wait_for_user(book_rfid=cell.get('book_rfid'))
+
         await algorithms.give_shelf(cell['row'], cell['x'], cell['y'])
         
         book = db.get_book_by_rfid(cell['book_rfid']) if cell.get('book_rfid') else None

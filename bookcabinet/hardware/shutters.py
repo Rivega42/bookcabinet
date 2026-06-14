@@ -36,7 +36,16 @@ class Shutters:
     async def close_window(self):
         await self.close_shutter('outer')
         await self.close_shutter('inner')
-    
+
+    def close_all_immediate(self):
+        """Синхронное НЕМЕДЛЕННОЕ закрытие обеих шторок — для аварийного стопа.
+        stop() синхронный и не может await'ить close_window(), а оставлять
+        шторку открытой при аварии нельзя (рука/книга в окне)."""
+        gpio.write(GPIO_PINS['SHUTTER_OUTER'], 0)
+        gpio.write(GPIO_PINS['SHUTTER_INNER'], 0)
+        self.states['outer'] = 'closed'
+        self.states['inner'] = 'closed'
+
     def get_state(self, shutter: str = 'outer') -> str:
         return self.states.get(shutter, 'unknown')
     

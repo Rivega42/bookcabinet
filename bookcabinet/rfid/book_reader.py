@@ -54,6 +54,10 @@ class BookReader:
         self.on_tag_read: Optional[Callable] = None
         self._running = False
         self._last_tags: List[str] = []
+        # Метки, видимые ПРЯМО СЕЙЧАС (обновляет цикл start_polling каждую итерацию).
+        # Читается из wait_for_user для детекта «книгу забрали» — без доступа к
+        # serial-порту, поэтому гонок с циклом опроса нет.
+        self.current_tags: set = set()
     
     async def connect(self) -> bool:
         if self.mock_mode:
@@ -238,12 +242,18 @@ class BookReader:
                         self.on_tag_read({'epc': tag})
             
             current_set = set(tags)
+            self.current_tags = current_set
             seen_tags = seen_tags & current_set
-            
+
             await asyncio.sleep(interval)
-    
+
     def stop_polling(self):
         self._running = False
+        self.current_tags = set()
+
+    def is_present(self, epc: str) -> bool:
+        """Видна ли метка прямо сейчас (по последнему циклу опроса)."""
+        return epc in self.current_tags
     
     def simulate_tag(self, epc: str):
         """Симуляция чтения метки (для тестов)"""
