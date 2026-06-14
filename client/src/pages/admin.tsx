@@ -1,5 +1,6 @@
-import { useState } from "react";
-import { Link } from "wouter";
+import { useState, useEffect } from "react";
+import { Link, useLocation } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -20,6 +21,21 @@ import {
 export default function AdminPage() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [testReader, setTestReader] = useState<string | null>(null);
+  const [, setLocation] = useLocation();
+
+  // Ролевой гейт: бэкенд режет admin-эндпоинты, но и UI не показываем не-админу.
+  const { data: authData, isLoading } = useQuery<{ user: { role?: string } | null }>({
+    queryKey: ['/api/auth/current'],
+  });
+  const role = authData?.user?.role;
+  const allowed = role === 'admin';
+
+  useEffect(() => {
+    if (!isLoading && !allowed) setLocation('/');
+  }, [isLoading, allowed, setLocation]);
+
+  if (isLoading) return null;
+  if (!allowed) return null;
 
   return (
     <div className="min-h-screen bg-slate-100" data-testid="page-admin">

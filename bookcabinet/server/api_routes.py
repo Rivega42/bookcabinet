@@ -270,20 +270,20 @@ async def get_card_readers_status(request):
 
 async def get_cells(request):
     cells = db.get_all_cells()
-    return json_response(cells)
+    return json_response([_camelize_row(c) for c in cells])
 
 
 async def get_cell(request):
     cell_id = int(request.match_info['id'])
     cell = db.get_cell(cell_id)
     if cell:
-        return json_response(cell)
+        return json_response(_camelize_row(cell))
     return json_response({'error': 'Cell not found'}, 404)
 
 
 async def get_cells_extraction(request):
     cells = db.get_cells_needing_extraction()
-    return json_response(cells)
+    return json_response([_camelize_row(c) for c in cells])
 
 
 # ============ SENSORS & POSITION ============
@@ -357,6 +357,8 @@ def _camelize_row(row: dict) -> dict:
         'due_date': 'dueDate', 'book_rfid': 'bookRfid',
         'book_title': 'bookTitle', 'reserved_for': 'reservedFor',
         'needs_extraction': 'needsExtraction', 'card_type': 'cardType',
+        'cell_row': 'cellRow', 'cell_x': 'cellX', 'cell_y': 'cellY',
+        'user_rfid': 'userRfid',
     }
     out = dict(row)
     for snake, camel in aliases.items():
@@ -395,9 +397,10 @@ class _KioskProgress:
             elif op == 'GIVE':
                 mech = min(11 + (step - 1) // 4, 14)  # 12 шагов GIVE → 11..14
                 await ws_handler.send_progress({'step': mech, 'label': label, 'status': 'running'})
-        else:  # return: в business-пути механика — только GIVE (размещение в ячейку)
+        else:  # return: механика — только GIVE (укладка книги в ячейку). Чистая шкала 1..4.
             if op == 'GIVE':
-                mech = 4 + max(1, round(step * 8 / 12))  # 5..12
+                total = ev.get('total', 12) or 12
+                mech = 1 + min(3, (step - 1) * 4 // total)
                 await ws_handler.send_progress({'step': mech, 'label': label, 'status': 'running'})
 
 
@@ -451,9 +454,19 @@ async def get_users(request):
 
 
 async def post_auth_logout(request):
-    """Киоск шлёт logout при автозавершении сессии; сессии в aiohttp
-    клиентские, серверу достаточно подтвердить."""
+    """Киоск шлёт logout при автозавершении сессии. Чистим и серверный
+    current_user, иначе /api/auth/current (ролевой гейт админки) отдавал бы
+    устаревшего пользователя после выхода."""
+    auth_service.logout()
     return json_response({'success': True})
+
+
+async def get_auth_current(request):
+    """Текущий авторизованный пользователь (для ролевого гейта админки).
+    На устройстве модель сессии — синглтон (один киоск), поэтому возвращаем
+    auth_service.get_current_user(); фронт по роли решает, пускать ли в /admin."""
+    user = auth_service.get_current_user()
+    return json_response({'user': user})
 
 
 async def post_emergency_stop(request):
@@ -577,13 +590,19 @@ async def get_rfid_readers(request):
         book_connected = book_reader.get_status().get('connected', False)
     except Exception:
         book_connected = False
+    # role/port — то, что рисует админ-дашборд (reader.role · reader.port)
     return json_response([
         {'id': 'nfc', 'name': 'ACR1281U-C', 'type': 'NFC 13.56MHz',
-         'description': 'Читательские билеты', 'connected': status.get('nfc_connected', False)},
+         'description': 'Читательские билеты', 'role': 'Читательские билеты',
+         'port': 'PC/SC', 'connected': status.get('nfc_connected', False)},
         {'id': 'uhf_card', 'name': 'IQRFID-5102', 'type': 'UHF 900MHz',
-         'description': 'Карты ЕКП', 'connected': status.get('uhf_connected', False)},
+         'description': 'Карты ЕКП', 'role': 'Карты ЕКП',
+         'port': RFID.get('uhf_card_reader', '/dev/rfid_uhf_card'),
+         'connected': status.get('uhf_connected', False)},
         {'id': 'book', 'name': 'RRU9816', 'type': 'UHF 900MHz',
-         'description': 'Метки книг', 'connected': book_connected},
+         'description': 'Метки книг', 'role': 'Метки книг',
+         'port': RFID.get('book_reader', '/dev/rfid_book'),
+         'connected': book_connected},
     ])
 
 
@@ -1215,7 +1234,7 @@ async def get_operations(request):
             cursor.execute('SELECT * FROM operations ORDER BY id DESC LIMIT ?', (limit,))
         else:
             cursor.execute('SELECT * FROM operations WHERE operation = ? ORDER BY id DESC LIMIT ?', (filter_type, limit))
-        return json_response([dict(row) for row in cursor.fetchall()])
+        return json_response([_camelize_row(dict(row)) for row in cursor.fetchall()])
 
 
 async def get_statistics(request):
@@ -1673,6 +1692,7 @@ def setup_routes(app: web.Application):
     app.router.add_get('/api/rfid-readers', get_rfid_readers)
     app.router.add_get('/api/rfid-test/{id}', get_rfid_test)
     app.router.add_post('/api/auth/logout', post_auth_logout)
+    app.router.add_get('/api/auth/current', get_auth_current)
     app.router.add_post('/api/emergency-stop', post_emergency_stop)
     app.router.add_post('/api/shutter/close-all', post_shutter_close_all)
     app.router.add_post('/api/maintenance', post_maintenance)

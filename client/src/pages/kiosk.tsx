@@ -5,7 +5,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
@@ -23,7 +22,6 @@ import {
   Loader2,
   ArrowLeft,
   Library,
-  Package,
   AlertTriangle,
   Search,
   Plus,
@@ -44,7 +42,6 @@ import {
   Box,
   GraduationCap,
   Sliders,
-  Radio,
 } from "lucide-react";
 import { ReaderMenu, BookList, ReturnBook } from "@/components/kiosk/ReaderScreens";
 import { ProgressScreen, SuccessScreen, ErrorScreen, MaintenanceScreen } from "@/components/kiosk/FeedbackScreens";
@@ -111,7 +108,6 @@ export default function KioskPage() {
   const [progressValue, setProgressValue] = useState(0);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
-  const [manualReturnRfid, setManualReturnRfid] = useState('');
   const [issuingBook, setIssuingBook] = useState<Book | null>(null);
   const [, setLocation] = useLocation();
   const { toast } = useToast();
@@ -218,6 +214,16 @@ export default function KioskPage() {
               }
             }
           }
+
+          // Живой прогресс механической операции на общем экране 'progress'
+          // (загрузка/изъятие-все/инвентаризация шлют raw progress {step,total,message}).
+          if (msg.type === 'progress' && screen === 'progress' && msg.data) {
+            const d = msg.data as any;
+            if (d.message) setProgressMessage(d.message);
+            if (typeof d.step === 'number' && typeof d.total === 'number' && d.total > 0) {
+              setProgressValue(Math.min(95, Math.round((d.step / d.total) * 100)));
+            }
+          }
         } catch {}
       };
 
@@ -290,21 +296,26 @@ export default function KioskPage() {
     },
   });
 
-  const issueMutation = useMutation({
-    mutationFn: async ({ bookRfid, userRfid }: { bookRfid: string; userRfid: string }) => {
-      const response = await apiRequest('POST', '/api/issue', { bookRfid, userRfid });
+  // Выдача идёт через экран IssueProcess (он сам POST'ит /api/book/issue);
+  // одиночное изъятие — через общий экран 'progress' (как «изъять все»).
+  const singleExtractMutation = useMutation({
+    mutationFn: async (cellId: number) => {
+      const response = await apiRequest('POST', '/api/extract', { cellId });
       return response.json();
     },
     onSuccess: (data) => {
       if (data.success) {
-        setSuccessMessage(`Книга "${data.book.title}" выдана`);
+        setSuccessMessage(`Книга "${data.book?.title || ''}" изъята`);
         setScreen('success');
-        queryClient.invalidateQueries({ queryKey: ['/api/books'] });
         queryClient.invalidateQueries({ queryKey: ['/api/cells'] });
+        queryClient.invalidateQueries({ queryKey: ['/api/cells/extraction'] });
+      } else {
+        setErrorMessage(data.error || 'Ошибка изъятия');
+        setScreen('error');
       }
     },
     onError: (error: any) => {
-      setErrorMessage(error.message || 'Ошибка выдачи');
+      setErrorMessage(error.message || 'Ошибка изъятия');
       setScreen('error');
     },
   });
@@ -318,6 +329,7 @@ export default function KioskPage() {
       setSuccessMessage(`Изъято ${data.extracted} книг`);
       setScreen('success');
       queryClient.invalidateQueries({ queryKey: ['/api/cells'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/cells/extraction'] });
     },
     onError: (error: any) => {
       setErrorMessage(error.message || 'Ошибка изъятия');
@@ -364,13 +376,6 @@ export default function KioskPage() {
       default:
         setScreen('reader_menu');
     }
-  };
-
-  const handleIssueBook = (book: Book) => {
-    if (!session) return;
-    setIssuingBook(book);
-    setScreen('issue_process');
-    // IssueProcess component now triggers the API call itself on mount
   };
 
   const renderHeader = () => {
@@ -493,222 +498,6 @@ export default function KioskPage() {
     </div>
   );
 
-  const renderReaderMenu = () => (
-    <div className="min-h-screen bg-slate-100 pt-28 p-6" data-testid="screen-reader-menu">
-      <div className="max-w-4xl mx-auto">
-        <h2 className="text-3xl font-bold text-slate-800 mb-6 text-center">Выберите действие</h2>
-        
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-          <Card
-            className="cursor-pointer hover:shadow-xl transition-all border-2 hover:border-blue-500 active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-blue-500"
-            onClick={() => setScreen('book_list')}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                setScreen('book_list');
-              }
-            }}
-            role="button"
-            tabIndex={0}
-            aria-label="Забрать забронированные книги"
-            data-testid="card-get-book"
-          >
-            <CardContent className="p-10 flex flex-col items-center text-center">
-              <BookOpen className="w-20 h-20 text-blue-500 mb-4" aria-hidden="true" />
-              <h3 className="text-2xl font-bold mb-2">Забрать книгу</h3>
-              <p className="text-lg text-slate-500">
-                {session?.reservedBooks.length
-                  ? `${session.reservedBooks.length} забронировано`
-                  : 'Нет бронирований'}
-              </p>
-              {session && session.reservedBooks.length > 0 && (
-                <Badge className="mt-3 text-base px-4 py-1" variant="default">
-                  {session.reservedBooks.length} книг
-                </Badge>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card
-            className="cursor-pointer hover:shadow-xl transition-all border-2 hover:border-green-500 active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-green-500"
-            onClick={() => setScreen('return_book')}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                setScreen('return_book');
-              }
-            }}
-            role="button"
-            tabIndex={0}
-            aria-label="Вернуть книгу"
-            data-testid="card-return-book"
-          >
-            <CardContent className="p-10 flex flex-col items-center text-center">
-              <Undo2 className="w-20 h-20 text-green-500 mb-4" aria-hidden="true" />
-              <h3 className="text-2xl font-bold mb-2">Вернуть книгу</h3>
-              <p className="text-lg text-slate-500">
-                Положите книгу в окно приёма
-              </p>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    </div>
-  );
-
-  const renderBookList = () => (
-    <div className="min-h-screen bg-slate-100 pt-28 p-6" data-testid="screen-book-list">
-      <div className="max-w-4xl mx-auto">
-        <h2 className="text-3xl font-bold text-slate-800 mb-6">Ваши забронированные книги</h2>
-        
-        {session?.reservedBooks.length === 0 ? (
-          <Card className="p-10 text-center">
-            <BookOpen className="w-16 h-16 text-slate-300 mx-auto mb-4" />
-            <p className="text-xl text-slate-500">Нет забронированных книг</p>
-          </Card>
-        ) : (
-          <div className="space-y-4">
-            {session?.reservedBooks.map((book) => (
-              <Card key={book.id} className="p-5" data-testid={`card-book-${book.rfid}`}>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-xl font-bold">{book.title}</h3>
-                    <p className="text-base text-slate-500">{book.author}</p>
-                  </div>
-                  <Button 
-                    size="lg" 
-                    className="h-14 px-8 text-lg"
-                    onClick={() => handleIssueBook(book)}
-                    disabled={issueMutation.isPending}
-                    data-testid={`button-issue-${book.rfid}`}
-                  >
-                    <BookOpen className="w-5 h-5 mr-2" />
-                    Забрать
-                  </Button>
-                </div>
-              </Card>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-
-  const renderReturnBook = () => (
-    <div className="min-h-screen bg-slate-100 pt-28 p-6" data-testid="screen-return-book">
-      <div className="max-w-3xl mx-auto text-center">
-        <h2 className="text-3xl font-bold text-slate-800 mb-6">Возврат книги</h2>
-
-        <Card className="p-10 mb-6">
-          <Radio className="w-20 h-20 text-green-500 mx-auto mb-4 animate-pulse" />
-          <p className="text-xl mb-3">Положите книгу в окно приёма</p>
-          <p className="text-base text-slate-500 mb-6">
-            Книга будет автоматически распознана по RFID-метке
-          </p>
-
-          <div className="flex items-center justify-center gap-3 text-green-600 mb-4">
-            <span className="relative flex h-4 w-4">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-4 w-4 bg-green-500"></span>
-            </span>
-            <span className="text-lg font-medium">Ожидаю скан...</span>
-          </div>
-        </Card>
-
-        <Card className="p-6">
-          <p className="text-sm text-slate-500 mb-3">Ручной ввод RFID (если автоскан не сработал)</p>
-          <div className="flex gap-3 justify-center">
-            <Input
-              placeholder="RFID метка книги"
-              value={manualReturnRfid}
-              onChange={(e) => setManualReturnRfid(e.target.value)}
-              className="max-w-xs"
-            />
-            <Button
-              onClick={() => {
-                if (manualReturnRfid.trim()) {
-                  apiRequest('POST', '/api/return', { bookRfid: manualReturnRfid.trim() })
-                    .then(r => r.json())
-                    .then(data => {
-                      if (data.success) {
-                        setSuccessMessage(`Книга "${data.book?.title || manualReturnRfid}" возвращена`);
-                        setScreen('success');
-                      } else {
-                        toast({ title: 'Ошибка', description: data.error || 'Не удалось вернуть книгу', variant: 'destructive' });
-                      }
-                      setManualReturnRfid('');
-                    })
-                    .catch(err => toast({ title: 'Ошибка', description: err.message, variant: 'destructive' }));
-                }
-              }}
-              disabled={!manualReturnRfid.trim()}
-            >
-              Вернуть
-            </Button>
-          </div>
-        </Card>
-      </div>
-    </div>
-  );
-
-  const renderProgress = () => (
-    <div className="min-h-screen bg-slate-100 pt-28 flex items-center justify-center" data-testid="screen-progress">
-      <Card className="p-10 w-full max-w-xl text-center">
-        <Loader2 className="w-20 h-20 text-blue-500 mx-auto mb-4 animate-spin" />
-        <h2 className="text-2xl font-bold mb-3">{progressMessage}</h2>
-        <Progress value={progressValue} className="h-3 mb-3" />
-        <p className="text-slate-500">Пожалуйста, подождите...</p>
-      </Card>
-    </div>
-  );
-
-  const renderSuccess = () => (
-    <div className="min-h-screen bg-green-50 pt-28 flex items-center justify-center" data-testid="screen-success">
-      <Card className="p-10 w-full max-w-xl text-center border-green-500 border-2">
-        <CheckCircle2 className="w-24 h-24 text-green-500 mx-auto mb-4" />
-        <h2 className="text-3xl font-bold text-green-700 mb-3">Успешно!</h2>
-        <p className="text-xl text-slate-600 mb-6">{successMessage}</p>
-        <Button 
-          size="lg" 
-          className="h-14 px-10 text-lg"
-          onClick={handleBack}
-          data-testid="button-continue"
-        >
-          Продолжить
-        </Button>
-      </Card>
-    </div>
-  );
-
-  const renderError = () => (
-    <div className="min-h-screen bg-red-50 pt-28 flex items-center justify-center" data-testid="screen-error">
-      <Card className="p-10 w-full max-w-xl text-center border-red-500 border-2">
-        <XCircle className="w-24 h-24 text-red-500 mx-auto mb-4" />
-        <h2 className="text-3xl font-bold text-red-700 mb-3">Ошибка</h2>
-        <p className="text-xl text-slate-600 mb-6">{errorMessage}</p>
-        <Button 
-          size="lg" 
-          variant="destructive"
-          className="h-14 px-10 text-lg"
-          onClick={handleBack}
-          data-testid="button-back-error"
-        >
-          Назад
-        </Button>
-      </Card>
-    </div>
-  );
-
-  const renderMaintenance = () => (
-    <div className="min-h-screen bg-yellow-50 flex items-center justify-center" data-testid="screen-maintenance">
-      <Card className="p-10 w-full max-w-xl text-center border-yellow-500 border-2">
-        <AlertTriangle className="w-24 h-24 text-yellow-500 mx-auto mb-4" />
-        <h2 className="text-3xl font-bold text-yellow-700 mb-3">Шкаф временно недоступен</h2>
-        <p className="text-xl text-slate-600">Ведутся технические работы</p>
-      </Card>
-    </div>
-  );
-
   const renderCabinetView = () => {
     const cabinetCells = cells.map(cell => ({
       id: cell.id,
@@ -822,8 +611,15 @@ export default function KioskPage() {
       {screen === 'extract_books' && (
         <ExtractBooks
           extractAllPending={extractAllMutation.isPending}
+          onExtract={(cellId) => {
+            setProgressMessage('Изъятие книги...');
+            setProgressValue(10);
+            setScreen('progress');
+            singleExtractMutation.mutate(cellId);
+          }}
           onExtractAll={() => {
             setProgressMessage('Изъятие всех книг...');
+            setProgressValue(10);
             setScreen('progress');
             extractAllMutation.mutate();
           }}
