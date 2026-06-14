@@ -36,6 +36,18 @@ export function IssueProcess({ book, userRfid, onComplete, onError, wsRef }: Iss
   const [stepLabel, setStepLabel] = useState("");
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startedRef = useRef(false);
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+
+  // Сторож зависания: если WS-событие завершения потеряно (реконнект и т.п.) —
+  // не висим на экране прогресса вечно. Снимается при unmount (успех/ошибка
+  // меняют экран → размонтирование). 180 c с запасом перекрывают самый долгий цикл.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      onErrorRef.current('Операция не завершилась вовремя. Обратитесь к сотруднику.');
+    }, 180000);
+    return () => clearTimeout(t);
+  }, []);
 
   // Map mechanical step numbers (1-14) to UI steps (1-6)
   const mapMechanicalStep = useCallback((mechStep: number, status: string): number => {

@@ -51,5 +51,31 @@ class TestReturnProgressScale(unittest.TestCase):
             self.assertIn(mech(s), (1, 2, 3, 4))
 
 
+class TestRoleGates(unittest.TestCase):
+    """Прямое управление механикой / режим обслуживания закрыты ролью."""
+
+    class _FakeReq:
+        async def json(self):
+            return {}
+
+    def _call(self, handler):
+        import asyncio
+        return asyncio.run(handler(self._FakeReq()))
+
+    def test_reader_blocked_on_mechanical_and_maintenance(self):
+        from bookcabinet.business.auth import auth_service
+        from bookcabinet.server import api_routes
+        prev = auth_service.current_user
+        try:
+            auth_service.current_user = {'rfid': 'R1', 'name': 'Читатель', 'role': 'reader'}
+            for handler in (api_routes.post_move, api_routes.post_init,
+                            api_routes.post_maintenance):
+                resp = self._call(handler)
+                self.assertIn(resp.status, (401, 403),
+                              f'{handler.__name__} должен резать reader')
+        finally:
+            auth_service.current_user = prev
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -485,6 +485,9 @@ async def post_shutter_close_all(request):
 
 
 async def post_maintenance(request):
+    error = role_check('admin')
+    if error:
+        return error
     data = await request.json()
     enabled = bool(data.get('enabled'))
     db.set_setting('maintenance_mode', '1' if enabled else '0')
@@ -749,6 +752,9 @@ async def post_inventory(request):
 # ============ MECHANICS ============
 
 async def post_init(request):
+    error = role_check('librarian', 'admin')
+    if error:
+        return error
     success = await algorithms.init_home()
     return json_response({'success': success})
 
@@ -759,10 +765,14 @@ async def post_stop(request):
 
 
 async def post_move(request):
+    # Прямое управление моторами (произвольный XY) — только админ/обслуживание.
+    error = role_check('admin')
+    if error:
+        return error
     data = await request.json()
     x = data.get('x', 0)
     y = data.get('y', 0)
-    
+
     success = await motors.move_xy(x, y)
     return json_response({'success': success, 'position': motors.get_position()})
 
