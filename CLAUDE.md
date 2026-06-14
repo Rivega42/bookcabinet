@@ -12,7 +12,7 @@ RFID-идентификация (читательский билет NFC, кар
 Боевая цепочка на шкафу (systemd, выложено 2026-06-13): `pigpiod + pcscd-daemon → bookcabinet.service (python3 -m bookcabinet.main, aiohttp, порт 5000, HOST=127.0.0.1) → chromium-kiosk`.
 
 - **Боевой сервер — Python aiohttp** (`bookcabinet/main.py` → `server/web_server.py` + `server/api_routes.py` + WebSocket). Отдаёт API и фронт `dist/public`. Бизнес-логика — `business/*` (стейт-машины над БД v2, транзакционные переходы). `tools/*.py` — слой механики.
-- **Node/Express (`server/*.ts`) больше НЕ боевой** — мигрировали на aiohttp (проверено на железе). Express — кандидат в `_attic/`; `bridge.py`/`workflows/*` — наследие Node-пути.
+- **Node/Express (`server/*.ts`) больше НЕ боевой** — мигрировали на aiohttp (проверено на железе). Express — кандидат в `_attic/`; `bridge.py`/`workflows/*` (наследие Node-пути) перенесены в `_attic/bookcabinet/` (2026-06-14): aiohttp их не звал, бизнес-логика живёт в `business/*` → `mechanics/algorithms.py`.
 - Фронтенд: React в `client/`, сборка vite → `dist/public/`.
 - БД: SQLite v2 `bookcabinet/data/shelf_data.db` (`bookcabinet/database/`, user_version=2, alembic-миграции). Drizzle/PostgreSQL-схема в `shared/schema.ts` НЕ используется.
 - Механика: канонический слой движения — `tools/corexy_motion_v2.py`; приложение ходит через `mechanics/algorithms.py` → `hardware/motors.py`. HOME = LEFT+BOTTOM, скорости хоминга 800/300 — живые истины, не менять.
