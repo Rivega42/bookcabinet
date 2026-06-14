@@ -171,6 +171,29 @@ export function ReturnBook({ isPending, onManualReturn, onComplete, onError, wsR
   const [returnPending, setReturnPending] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const returnStartedRef = useRef(false);
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+
+  // Книгу не поднесли за 60 c — не зависаем на «положите книгу», выходим.
+  useEffect(() => {
+    if (sequenceStarted) return;
+    const deadline = setTimeout(() => {
+      if (!returnStartedRef.current) {
+        onErrorRef.current?.('Книга не обнаружена. Время ожидания истекло.');
+      }
+    }, 60000);
+    return () => clearTimeout(deadline);
+  }, [sequenceStarted]);
+
+  // Сторож зависания механической фазы: если WS-событие завершения потеряно
+  // (реконнект), не висим вечно на экране прогресса возврата.
+  useEffect(() => {
+    if (!sequenceStarted) return;
+    const t = setTimeout(() => {
+      onErrorRef.current?.('Возврат не завершился вовремя. Обратитесь к сотруднику.');
+    }, 180000);
+    return () => clearTimeout(t);
+  }, [sequenceStarted]);
 
   // Бэкенд (_KioskProgress, return-ветка) уже шлёт чистую шкалу 1..4 —
   // ровно под RETURN_STEPS. Здесь только зажимаем в диапазон.

@@ -33,8 +33,17 @@ class UnloadService:
         # Детект «книгу забрали» по RRU9816 (метка книги перестала видеться в окне)
         await algorithms.wait_for_user(book_rfid=cell.get('book_rfid'))
 
-        await algorithms.give_shelf(cell['row'], cell['x'], cell['y'])
-        
+        give_ok = await algorithms.give_shelf(cell['row'], cell['x'], cell['y'])
+        if not give_ok:
+            # Книга уже у библиотекаря (физически изъята) → статус extracted ставим,
+            # но пустая полка не вернулась в ячейку: громко логируем застрявшую
+            # механику, чтобы это не осталось незамеченным.
+            db.add_system_log(
+                'ERROR',
+                f"Изъятие: пустая полка не вернулась в ячейку {cell_id} "
+                f"(книга {cell.get('book_rfid')}) — проверьте механику шкафа.",
+                'unload')
+
         book = db.get_book_by_rfid(cell['book_rfid']) if cell.get('book_rfid') else None
 
         if cell.get('book_rfid'):

@@ -40,8 +40,18 @@ class PathPlanner:
             from tools import calibration as field_calibration
             self._field = field_calibration
             self._field_cal = field_calibration._load()
-        except Exception:
-            pass
+        except Exception as e:
+            # КРИТИЧНО: без полевой калибровки get_cell_position уедет на ДЕФОЛТНЫЕ
+            # XY ([0,4500,9000]) мимо реальных стоек. Молчать нельзя — на железе
+            # это значит неверное движение каретки.
+            try:
+                import logging
+                logging.getLogger(__name__).error(
+                    'Полевая калибровка (tools/calibration + calibration.json) НЕ '
+                    'загрузилась (%s) — XY ячеек будут ДЕФОЛТНЫМИ, движение неверным. '
+                    'Проверьте корневой calibration.json и sys.path.', e)
+            except Exception:
+                pass
 
     def get_cell_position(self, row: str, x: int, y: int) -> Tuple[int, int]:
         """Получить координаты ячейки в шагах.
