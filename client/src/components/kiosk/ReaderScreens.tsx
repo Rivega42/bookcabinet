@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
-import { BookOpen, Undo2, CreditCard, Loader2, Radio, Clock, CheckCircle2, Package } from "lucide-react";
+import { BookOpen, Undo2, CreditCard, Loader2, Radio, Clock, CheckCircle2 } from "lucide-react";
 import type { User, Book } from "@shared/schema";
 import type { SessionData } from "./types";
 
@@ -144,13 +144,13 @@ interface ReturnStep {
   description: string;
 }
 
+// Реальный процесс возврата: книгу УЖЕ положили в окно (RRU распознал) → шкаф
+// её укладывает в ячейку (give_shelf). Бэкенд шлёт чистую шкалу 1..4 (_KioskProgress).
 const RETURN_STEPS: ReturnStep[] = [
-  { id: 1, label: "Подготовка", description: "Хоминг каретки" },
-  { id: 2, label: "Окно приёма", description: "Каретка перемещается к окну" },
-  { id: 3, label: "Ожидание", description: "Положите книгу в окно" },
-  { id: 4, label: "Приём", description: "Закрытие шторок, втягивание полки" },
-  { id: 5, label: "Размещение", description: "Перемещение книги в ячейку" },
-  { id: 6, label: "Завершение", description: "Возврат каретки в исходное положение" },
+  { id: 1, label: "Приём", description: "Книга распознана, шторки закрываются" },
+  { id: 2, label: "Перемещение", description: "Каретка везёт книгу к ячейке" },
+  { id: 3, label: "Размещение", description: "Книга укладывается в ячейку" },
+  { id: 4, label: "Завершение", description: "Возврат каретки в исходное положение" },
 ];
 
 interface ReturnBookProps {
@@ -172,15 +172,10 @@ export function ReturnBook({ isPending, onManualReturn, onComplete, onError, wsR
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const returnStartedRef = useRef(false);
 
-  // Map mechanical step numbers (1-13) to UI steps (1-6)
+  // Бэкенд (_KioskProgress, return-ветка) уже шлёт чистую шкалу 1..4 —
+  // ровно под RETURN_STEPS. Здесь только зажимаем в диапазон.
   const mapMechanicalStep = (mechStep: number): number => {
-    if (mechStep <= 1) return 1;       // Home XY
-    if (mechStep <= 2) return 2;       // Move to window
-    if (mechStep <= 4) return 3;       // Open outer + wait
-    if (mechStep <= 8) return 4;       // Close outer + open inner + retract + close inner
-    if (mechStep <= 11) return 5;      // Move to cell + open inner + tray back
-    if (mechStep >= 12) return 6;      // Close inner + home
-    return 1;
+    return Math.min(RETURN_STEPS.length, Math.max(1, mechStep));
   };
 
   // Start the return sequence when a book RFID is detected
@@ -258,25 +253,11 @@ export function ReturnBook({ isPending, onManualReturn, onComplete, onError, wsR
             if (data.label) {
               setStepLabel(data.label);
             }
-            // When outer shutter opens for user wait (mechanical step 4, wait_seconds)
-            if (data.step === 4 && data.status === 'running' && data.wait_seconds) {
-              setTimer(data.wait_seconds);
-              // Restart timer for book placement
-              if (timerRef.current) clearInterval(timerRef.current);
-              let remaining = data.wait_seconds;
-              timerRef.current = setInterval(() => {
-                remaining--;
-                setTimer(remaining);
-                if (remaining <= 0) {
-                  if (timerRef.current) clearInterval(timerRef.current);
-                }
-              }, 1000);
-            }
           }
         }
 
         if (msg.type === 'operation_completed' && msg.data?.operation === 'return') {
-          setReturnStep(6);
+          setReturnStep(RETURN_STEPS.length);
           if (onComplete) {
             setTimeout(onComplete, 1500);
           }
@@ -412,19 +393,6 @@ export function ReturnBook({ isPending, onManualReturn, onComplete, onError, wsR
                 );
               })}
             </div>
-
-            {/* Timer during book placement wait (step 3) */}
-            {returnStep === 3 && timer > 0 && (
-              <Card className="p-6 text-center border-2 border-black mb-6">
-                <Package className="w-16 h-16 mx-auto mb-3 text-black" />
-                <h3 className="text-2xl font-bold mb-2">Положите книгу в окно!</h3>
-                <div className="flex items-center justify-center gap-2 text-lg">
-                  <Clock className="w-5 h-5" />
-                  <span className="font-bold text-2xl">{timer}</span>
-                  <span>сек.</span>
-                </div>
-              </Card>
-            )}
           </>
         )}
 

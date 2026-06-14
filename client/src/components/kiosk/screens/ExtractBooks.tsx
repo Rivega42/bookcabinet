@@ -1,39 +1,20 @@
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { CheckCircle2 } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
-import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Cell } from "@shared/schema";
 
 interface ExtractBooksProps {
   extractAllPending: boolean;
+  onExtract: (cellId: number) => void;
   onExtractAll: () => void;
 }
 
-export function ExtractBooks({ extractAllPending, onExtractAll }: ExtractBooksProps) {
-  const { toast } = useToast();
-  const { data: cellsData = [] } = useQuery<Cell[]>({ queryKey: ['/api/cells'] });
-
-  const extractMutation = useMutation({
-    mutationFn: async (cellId: number) => {
-      const response = await apiRequest('POST', '/api/extract', { cellId });
-      return response.json();
-    },
-    onSuccess: (data) => {
-      if (data.success) {
-        toast({ title: 'Успешно', description: `Книга "${data.book?.title}" изъята` });
-        queryClient.invalidateQueries({ queryKey: ['/api/cells'] });
-        queryClient.invalidateQueries({ queryKey: ['/api/cells/extraction'] });
-      }
-    },
-    onError: (error: any) => {
-      toast({ title: 'Ошибка', description: error.message, variant: 'destructive' });
-    },
-  });
-
-    const extractionCells = cellsData.filter(c => c.needsExtraction);
+export function ExtractBooks({ extractAllPending, onExtract, onExtractAll }: ExtractBooksProps) {
+  // Эндпоинт уже отдаёт ТОЛЬКО ячейки, требующие изъятия (awaiting_extraction),
+  // camelize на бэке → bookTitle/needsExtraction корректны. Локальный фильтр не нужен.
+  const { data: extractionCells = [] } = useQuery<Cell[]>({ queryKey: ['/api/cells/extraction'] });
 
     return (
       <div className="min-h-screen bg-slate-100 pt-28 p-6" data-testid="screen-extract-books">
@@ -69,9 +50,9 @@ export function ExtractBooks({ extractAllPending, onExtractAll }: ExtractBooksPr
                             Ячейка: {cell.row} X{cell.x} Y{cell.y}
                           </p>
                         </div>
-                        <Button 
-                          onClick={() => extractMutation.mutate(cell.id)}
-                          disabled={extractMutation.isPending}
+                        <Button
+                          onClick={() => onExtract(cell.id)}
+                          disabled={extractAllPending}
                           data-testid={`button-extract-${cell.id}`}
                         >
                           Изъять
