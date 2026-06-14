@@ -29,9 +29,35 @@ class PathPlanner:
         self.positions_x = calibration.get('positions.x', [0, 4500, 9000])
         self.positions_y = calibration.get('positions.y', [i * 450 for i in range(21)])
         self.speed = calibration.get('speeds.xy', 4000)
-    
+        # ИСТОЧНИК ИСТИНЫ по XY ячеек — полевая калибровка из корневого
+        # calibration.json (racks + per-rack shelves.anchors + depth), тот же
+        # резолвер, что у tools/-скриптов, которыми механику отлаживали на железе.
+        # Прежняя app-схема (positions.x/y) почти всегда пустая → дефолты мимо реальных
+        # стоек; держим её только как фоллбек. См. docs/FLOWS.md.
+        self._field = None
+        self._field_cal = None
+        try:
+            from tools import calibration as field_calibration
+            self._field = field_calibration
+            self._field_cal = field_calibration._load()
+        except Exception:
+            pass
+
     def get_cell_position(self, row: str, x: int, y: int) -> Tuple[int, int]:
-        """Получить координаты ячейки в шагах"""
+        """Получить координаты ячейки в шагах.
+
+        Маппинг app-адресации (row,x,y) → полевой (depth.rack.shelf):
+        depth = 1(FRONT)/2(BACK); rack = x+1 (стойки 1..3); shelf = y (0..20).
+        """
+        if self._field_cal is not None:
+            try:
+                depth = 1 if row == 'FRONT' else 2
+                rack = x + 1
+                steps_x = self._field.get_rack_x(rack, self._field_cal)
+                steps_y = self._field.interpolate_y(y, depth, self._field_cal, rack=rack)
+                return (steps_x, steps_y)
+            except Exception:
+                pass  # фоллбек на app-схему ниже
         steps_x = self.positions_x[x] if x < len(self.positions_x) else 0
         steps_y = self.positions_y[y] if y < len(self.positions_y) else 0
         return (steps_x, steps_y)

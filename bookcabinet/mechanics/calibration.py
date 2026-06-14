@@ -104,16 +104,17 @@ class Calibration:
                     return data
             except Exception:
                 pass
-        # Файла нет (или он битый) → едем по ДЕФОЛТНЫМ XY/grab, НЕ по полевым
-        # racks/shelves из корневого calibration.json. На шкафу это надо видеть:
-        # пока не прогнан встроенный мастер калибровки, механика приложения на дефолтах.
-        # Подробности — docs/FLOWS.md, раздел «два файла калибровки».
+        # Файла нет (или он битый). XY ячеек приложение всё равно берёт из ПОЛЕВОГО
+        # корневого calibration.json (PathPlanner._field), а вот grab_front/grab_back
+        # (глубина выдвижения лотка), kinematics и speeds останутся ДЕФОЛТНЫМИ.
+        # На шкафу это надо видеть. Подробности — docs/FLOWS.md.
         try:
             import logging
             logging.getLogger(__name__).warning(
-                'Калибровка приложения %s не найдена — используются ДЕФОЛТНЫЕ '
-                'positions/grab (не полевые racks/shelves). Прогоните мастер '
-                'калибровки в админке. См. docs/FLOWS.md.', self.filepath)
+                'Калибровка приложения %s не найдена — grab/kinematics/speeds на '
+                'ДЕФОЛТАХ (XY ячеек берётся из полевого calibration.json). '
+                'При нужде прогоните мастер калибровки в админке. См. docs/FLOWS.md.',
+                self.filepath)
         except Exception:
             pass
         return self._default_data()
