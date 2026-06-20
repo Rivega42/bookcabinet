@@ -398,160 +398,188 @@ class Motors:
         except Exception:
             return 11300
 
-    async def cross_handoff(self, direction: str, on_progress=None) -> bool:
-        """
-        Кросс-рядный ПЕРЕХВАТ полки — порт tools/cross_operations_v2.py
-        (field-validated). 8 шагов с перехватом замков. Логика и константы
-        байт-в-байт из полевого скрипта; убраны input()-паузы, добавлен таймаут
-        на подвод к концевику (железное правило).
+    # ===== Низкоуровневые примитивы лотка для перехвата (порт cross_operations_v2) =====
+    # Константы байт-в-байт из field-validated скрипта. НЕ менять без железа.
+    _HF_FREQ = 12000          # TRAY_FREQ
+    _HF_LOCK_DISTANCE = 12600 # ход перехвата = 16 см между замками (сверено по geometry.md)
+    _HF_GRAB_PWM = 1200       # захват (НЕ servos.close_lock=1556!)
+    _HF_RELEASE_PWM = 500     # отпускание
+    _HF_BACKOFF = 1500
+    _HF_SLOW = 1500
+    _HF_TIMEOUT = 25.0        # страховка подвода к концевику (в поле таймаута нет)
 
-        direction:
-          'rear_to_front' — взять из ЗАДНЕГО ряда, вынести в ПЕРЕДНИЙ
-                            (для выдачи задней книги в переднее окно),
-          'front_to_rear' — из переднего в задний (для возврата в задний ряд).
-
-        ⚠️ ВАЛИДИРОВАТЬ НА ЖЕЛЕЗЕ рядом с tools/cross_operations_v2.py как эталоном.
-        Мок только проверяет порядок 8 шагов.
-        """
-        # --- константы cross_operations_v2.py (НЕ менять без железа) ---
-        STEP = GPIO_PINS["TRAY_STEP"]; DIR = GPIO_PINS["TRAY_DIR"]
-        EN1 = GPIO_PINS["TRAY_ENA_1"]; EN2 = GPIO_PINS["TRAY_ENA_2"]
-        FRONT = GPIO_PINS["SENSOR_TRAY_END"]; BACK = GPIO_PINS["SENSOR_TRAY_BEGIN"]
-        L_FRONT = GPIO_PINS["LOCK_FRONT"]; L_REAR = GPIO_PINS["LOCK_REAR"]
-        TRAY_FREQ = 12000
-        LOCK_DISTANCE = 12600
-        TRAY_CENTER = self._tray_center_steps()   # живой центр калибровки → фоллбек 11233 → 11300
-        LOCK_GRAB_PWM = 1200
-        LOCK_RELEASE_PWM = 500
-        BACKOFF_STEPS = 1500
-        SLOW_FREQ = 1500
-        MOVE_TIMEOUT = 25.0   # с, страховка подвода к концевику (в поле таймаута нет)
-
-        # DIR: 0=FRONT, 1=BACK
-        if direction == 'rear_to_front':
-            first_lock, second_lock = L_REAR, L_FRONT
-            first_sensor, second_sensor = BACK, FRONT
-            first_dir, second_dir = 1, 0     # подвод: к BACK / к FRONT
-            handoff_dir, center_dir = 0, 1   # перехват к FRONT, центр к BACK
-        elif direction == 'front_to_rear':
-            first_lock, second_lock = L_FRONT, L_REAR
-            first_sensor, second_sensor = FRONT, BACK
-            first_dir, second_dir = 0, 1
-            handoff_dir, center_dir = 1, 0
-        else:
-            return False
-
-        async def progress(step, msg):
-            if on_progress:
-                ev = on_progress({'step': step, 'total': 8, 'message': msg,
-                                  'operation': 'HANDOFF'})
-                if asyncio.iscoroutine(ev):
-                    await ev
-
-        # --- MOCK: только последовательность шагов ---
-        if self.mock_mode or not self.pi:
-            for i, msg in enumerate([
-                "Лоток к 1-му концевику", "Захват 1-м замком",
-                "Перехват: лоток на LOCK_DISTANCE", "Отпуск 1-го замка",
-                "Перехват 2-м замком", "Лоток ко 2-му концевику",
-                "Укладка: отпуск 2-го (strong)", "Лоток в CENTER"], 1):
-                await progress(i, msg)
-                await asyncio.sleep(0.01)
-            self.position["tray"] = 0
-            return True
-
+    def _tray_setup_pins(self):
         import pigpio
-        for p in (STEP, DIR, EN1, EN2):
-            self.pi.set_mode(p, pigpio.OUTPUT)
-        self.pi.write(EN1, 1); self.pi.write(EN2, 1)
-        for s in (FRONT, BACK):
-            self.pi.set_mode(s, pigpio.INPUT)
-            self.pi.set_pull_up_down(s, pigpio.PUD_UP)
-            self.pi.set_glitch_filter(s, 1000)
+        for p in ("TRAY_STEP", "TRAY_DIR", "TRAY_ENA_1", "TRAY_ENA_2"):
+            self.pi.set_mode(GPIO_PINS[p], pigpio.OUTPUT)
+        self.pi.write(GPIO_PINS["TRAY_ENA_1"], 1); self.pi.write(GPIO_PINS["TRAY_ENA_2"], 1)
+        for s in ("SENSOR_TRAY_END", "SENSOR_TRAY_BEGIN"):
+            self.pi.set_mode(GPIO_PINS[s], pigpio.INPUT)
+            self.pi.set_pull_up_down(GPIO_PINS[s], pigpio.PUD_UP)
+            self.pi.set_glitch_filter(GPIO_PINS[s], 1000)
         time.sleep(0.1)
 
-        def make_wave(freq):
-            half = int(1000000 / freq) // 2
-            self.pi.wave_clear()
-            self.pi.wave_add_generic([pigpio.pulse(1 << STEP, 0, half),
-                                      pigpio.pulse(0, 1 << STEP, half)])
-            return self.pi.wave_create()
+    def _tray_make_wave(self, freq):
+        import pigpio
+        STEP = GPIO_PINS["TRAY_STEP"]; half = int(1000000 / freq) // 2
+        self.pi.wave_clear()
+        self.pi.wave_add_generic([pigpio.pulse(1 << STEP, 0, half),
+                                  pigpio.pulse(0, 1 << STEP, half)])
+        return self.pi.wave_create()
 
-        def stable(sensor, n=5):
-            for _ in range(n):
-                if self.pi.read(sensor) == 0:
-                    return False
-                time.sleep(0.0005)
-            return True
+    def _tray_stable(self, sensor, n=5):
+        for _ in range(n):
+            if self.pi.read(sensor) == 0:
+                return False
+            time.sleep(0.0005)
+        return True
 
-        def move_steps(d, steps, freq):
-            w = make_wave(freq)
+    def _tray_move_steps(self, d, steps, freq):
+        EN1 = GPIO_PINS["TRAY_ENA_1"]; EN2 = GPIO_PINS["TRAY_ENA_2"]; DIR = GPIO_PINS["TRAY_DIR"]
+        w = self._tray_make_wave(freq)
+        self.pi.write(EN1, 0); self.pi.write(EN2, 0)
+        self.pi.write(DIR, d); time.sleep(0.01)
+        self.pi.wave_send_repeat(w)
+        time.sleep(steps / freq)
+        self.pi.wave_tx_stop()
+        self.pi.write(EN1, 1); self.pi.write(EN2, 1)
+        self.pi.wave_delete(w)
+
+    async def _tray_to_endstop(self, d, sensor):
+        """FAST → backoff → SLOW подвод (как cross_operations_v2.tray_to_endstop),
+        с таймаутом. False, если концевик не пойман."""
+        EN1 = GPIO_PINS["TRAY_ENA_1"]; EN2 = GPIO_PINS["TRAY_ENA_2"]; DIR = GPIO_PINS["TRAY_DIR"]
+        for phase_freq in (self._HF_FREQ, self._HF_SLOW):
+            if phase_freq == self._HF_SLOW:
+                self._tray_move_steps(1 - d, self._HF_BACKOFF, self._HF_FREQ)
+                time.sleep(0.05)
+            w = self._tray_make_wave(phase_freq)
             self.pi.write(EN1, 0); self.pi.write(EN2, 0)
             self.pi.write(DIR, d); time.sleep(0.01)
             self.pi.wave_send_repeat(w)
-            time.sleep(steps / freq)
+            t0 = time.time(); hit = False
+            while time.time() - t0 < self._HF_TIMEOUT:
+                if self._tray_stable(sensor):
+                    hit = True; break
+                await asyncio.sleep(0.002)
             self.pi.wave_tx_stop()
             self.pi.write(EN1, 1); self.pi.write(EN2, 1)
             self.pi.wave_delete(w)
+            if not hit:
+                return False
+        return True
 
-        async def to_endstop(d, sensor):
-            """FAST → backoff → SLOW подвод (как cross_operations_v2.tray_to_endstop),
-            с таймаутом. Возвращает False, если концевик не пойман."""
-            for phase_freq in (TRAY_FREQ, SLOW_FREQ):
-                if phase_freq == SLOW_FREQ:
-                    move_steps(1 - d, BACKOFF_STEPS, TRAY_FREQ)  # отъезд от концевика
-                    time.sleep(0.05)
-                w = make_wave(phase_freq)
-                self.pi.write(EN1, 0); self.pi.write(EN2, 0)
-                self.pi.write(DIR, d); time.sleep(0.01)
-                self.pi.wave_send_repeat(w)
-                t0 = time.time(); hit = False
-                while time.time() - t0 < MOVE_TIMEOUT:
-                    if stable(sensor):
-                        hit = True; break
-                    await asyncio.sleep(0.002)
-                self.pi.wave_tx_stop()
-                self.pi.write(EN1, 1); self.pi.write(EN2, 1)
-                self.pi.wave_delete(w)
-                if not hit:
-                    return False
+    def _tray_lock(self, pin, pwm, strong=False):
+        for _ in range(3 if strong else 1):
+            self.pi.set_servo_pulsewidth(pin, pwm)
+            time.sleep(0.5)
+        self.pi.set_servo_pulsewidth(pin, 0)
+
+    async def _hf_progress(self, on_progress, step, total, msg):
+        if on_progress:
+            ev = on_progress({'step': step, 'total': total, 'message': msg,
+                              'operation': 'HANDOFF'})
+            if asyncio.iscoroutine(ev):
+                await ev
+
+    async def cross_grab_onto_platform(self, from_row: str, on_progress=None,
+                                       step_base: int = 0, total: int = 5) -> bool:
+        """Шаги 1–5 перехвата: захватить полку из стойки `from_row` НА платформу.
+        После: полку держит ПРОТИВОПОЛОЖНЫЙ замок (из BACK → передний; из FRONT → задний),
+        её можно везти кареткой к окну. (Эквивалент geometry.md extract_*.)"""
+        FRONT = GPIO_PINS["SENSOR_TRAY_END"]; BACK = GPIO_PINS["SENSOR_TRAY_BEGIN"]
+        L_FRONT = GPIO_PINS["LOCK_FRONT"]; L_REAR = GPIO_PINS["LOCK_REAR"]
+        if from_row == 'BACK':
+            first_lock, second_lock, first_sensor, first_dir, handoff_dir = L_REAR, L_FRONT, BACK, 1, 0
+        elif from_row == 'FRONT':
+            first_lock, second_lock, first_sensor, first_dir, handoff_dir = L_FRONT, L_REAR, FRONT, 0, 1
+        else:
+            return False
+        steps = ["Лоток к концевику (захват из стойки)", "Захват полки 1-м замком",
+                 "Перехват: лоток на LOCK_DISTANCE", "Отпуск 1-го замка", "Перехват 2-м замком"]
+        if self.mock_mode or not self.pi:
+            for i, m in enumerate(steps, 1):
+                await self._hf_progress(on_progress, step_base + i, total, m); await asyncio.sleep(0.01)
             return True
-
-        def lock(pin, pwm, strong=False):
-            for _ in range(3 if strong else 1):
-                self.pi.set_servo_pulsewidth(pin, pwm)
-                time.sleep(0.5)
-            self.pi.set_servo_pulsewidth(pin, 0)
-
+        self._tray_setup_pins()
         try:
-            await progress(1, "Лоток к концевику (захват из стойки)")
-            if not await to_endstop(first_dir, first_sensor):
+            await self._hf_progress(on_progress, step_base + 1, total, steps[0])
+            if not await self._tray_to_endstop(first_dir, first_sensor):
                 return False
-            await progress(2, "Захват полки 1-м замком")
-            lock(first_lock, LOCK_GRAB_PWM)
-            await progress(3, "Перехват: лоток на LOCK_DISTANCE")
-            move_steps(handoff_dir, LOCK_DISTANCE, TRAY_FREQ)
-            await progress(4, "Отпуск 1-го замка")
-            lock(first_lock, LOCK_RELEASE_PWM)
-            await progress(5, "Перехват 2-м замком")
-            lock(second_lock, LOCK_GRAB_PWM)
-            await progress(6, "Лоток ко 2-му концевику")
-            if not await to_endstop(second_dir, second_sensor):
-                return False
-            await progress(7, "Укладка: отпуск 2-го замка (strong)")
-            lock(second_lock, LOCK_RELEASE_PWM, strong=True)
-            await progress(8, "Лоток в CENTER")
-            move_steps(center_dir, TRAY_CENTER, TRAY_FREQ)
+            await self._hf_progress(on_progress, step_base + 2, total, steps[1])
+            self._tray_lock(first_lock, self._HF_GRAB_PWM)
+            await self._hf_progress(on_progress, step_base + 3, total, steps[2])
+            self._tray_move_steps(handoff_dir, self._HF_LOCK_DISTANCE, self._HF_FREQ)
+            await self._hf_progress(on_progress, step_base + 4, total, steps[3])
+            self._tray_lock(first_lock, self._HF_RELEASE_PWM)
+            await self._hf_progress(on_progress, step_base + 5, total, steps[4])
+            self._tray_lock(second_lock, self._HF_GRAB_PWM)
+            return True
+        except Exception:
+            return False
+        finally:
+            self.pi.write(GPIO_PINS["TRAY_ENA_1"], 1); self.pi.write(GPIO_PINS["TRAY_ENA_2"], 1)
+
+    async def cross_place_into_rack(self, to_row: str, on_progress=None,
+                                    step_base: int = 5, total: int = 8) -> bool:
+        """Шаги 6–8 перехвата: уложить полку (держит замок ряда `to_row`) В стойку `to_row`
+        и припарковать лоток в CENTER. (Эквивалент geometry.md return_*.)"""
+        FRONT = GPIO_PINS["SENSOR_TRAY_END"]; BACK = GPIO_PINS["SENSOR_TRAY_BEGIN"]
+        L_FRONT = GPIO_PINS["LOCK_FRONT"]; L_REAR = GPIO_PINS["LOCK_REAR"]
+        if to_row == 'FRONT':
+            place_lock, second_sensor, second_dir, center_dir = L_FRONT, FRONT, 0, 1
+        elif to_row == 'BACK':
+            place_lock, second_sensor, second_dir, center_dir = L_REAR, BACK, 1, 0
+        else:
+            return False
+        center = self._tray_center_steps()
+        steps = ["Лоток ко 2-му концевику", "Укладка: отпуск замка (strong)", "Лоток в CENTER"]
+        if self.mock_mode or not self.pi:
+            for i, m in enumerate(steps, 1):
+                await self._hf_progress(on_progress, step_base + i, total, m); await asyncio.sleep(0.01)
             self.position["tray"] = 0
             return True
+        self._tray_setup_pins()
+        try:
+            await self._hf_progress(on_progress, step_base + 1, total, steps[0])
+            if not await self._tray_to_endstop(second_dir, second_sensor):
+                return False
+            await self._hf_progress(on_progress, step_base + 2, total, steps[1])
+            self._tray_lock(place_lock, self._HF_RELEASE_PWM, strong=True)
+            await self._hf_progress(on_progress, step_base + 3, total, steps[2])
+            self._tray_move_steps(center_dir, center, self._HF_FREQ)
+            self.position["tray"] = 0
+            return True
+        except Exception:
+            return False
         finally:
-            self.pi.write(EN1, 1); self.pi.write(EN2, 1)
+            self.pi.write(GPIO_PINS["TRAY_ENA_1"], 1); self.pi.write(GPIO_PINS["TRAY_ENA_2"], 1)
             try:
-                self.pi.set_servo_pulsewidth(first_lock, 0)
-                self.pi.set_servo_pulsewidth(second_lock, 0)
+                self.pi.set_servo_pulsewidth(L_FRONT, 0); self.pi.set_servo_pulsewidth(L_REAR, 0)
                 self.pi.wave_clear()
             except Exception:
                 pass
+
+    async def cross_handoff(self, direction: str, on_progress=None) -> bool:
+        """
+        Кросс-рядный ПЕРЕХВАТ полки между СТОЙКАМИ — порт tools/cross_operations_v2.py
+        (field-validated). 8 шагов = grab_onto_platform(1–5) + place_into_rack(6–8).
+
+        direction:
+          'rear_to_front' — из ЗАДНЕЙ стойки в ПЕРЕДНЮЮ,
+          'front_to_rear' — из передней в заднюю.
+
+        ⚠️ ВАЛИДИРОВАТЬ НА ЖЕЛЕЗЕ рядом с tools/cross_operations_v2.py как эталоном.
+        """
+        if direction == 'rear_to_front':
+            from_row, to_row = 'BACK', 'FRONT'
+        elif direction == 'front_to_rear':
+            from_row, to_row = 'FRONT', 'BACK'
+        else:
+            return False
+        if not await self.cross_grab_onto_platform(from_row, on_progress, step_base=0, total=8):
+            return False
+        return await self.cross_place_into_rack(to_row, on_progress, step_base=5, total=8)
 
     async def test_motor(self, motor: str, direction: int, steps: int = 500) -> bool:
         """Test individual motor"""

@@ -525,6 +525,61 @@ class Algorithms:
             self.state = 'error'
             return False
     
+    async def deliver_to_window(self, row: str, x: int, y: int) -> bool:
+        """Доставить полку с книгой из ячейки к ПЕРЕДНЕМУ окну выдачи.
+
+        FRONT — обычный путь (одиночный замок) = существующий take_shelf.
+        BACK  — КРОСС-РЯД: перехват полки на платформу (motors.cross_grab_onto_platform,
+                задний ряд → передний замок держит) → каретка к окну → выдвинуть в окно.
+
+        ⚠️ Кросс-рядная ветка (BACK) — НОВАЯ композиция валидированных кусков
+        (перехват + существующая доставка к окну). Валидировать на железе пошагово
+        рядом с tools/cross_operations_v2.py. Живой issue-флоу её пока НЕ зовёт
+        (issue_service использует take_shelf) — включаем после сухого прогона.
+        Обратный путь (stow задней книги: фронт-held → задняя стойка) асимметричен —
+        проектируется на железе (см. docs/PEREHVAT.md).
+        """
+        if row == 'FRONT':
+            return await self.take_shelf(row, x, y)
+
+        self.current_operation = 'TAKE'
+        self.state = 'busy'
+        self._stop_requested = False
+        try:
+            await self._emit_progress(1, 8, 'Проверка лотка')
+            if not sensors.is_tray_retracted() or MOCK_MODE:
+                await self._safe_tray_retract()
+
+            tx, ty = self.path_planner.get_cell_position(row, x, y)
+            await self._emit_progress(2, 8, f'Перемещение к задней ячейке ({x}, {y})')
+            if not await self._safe_move_xy(tx, ty):
+                return False
+
+            # Перехват: захват задней полки НА платформу (передний замок держит)
+            if not await motors.cross_grab_onto_platform('BACK'):
+                await self._emit_error(2, 'Перехват: не удалось захватить полку из заднего ряда')
+                self.state = 'error'
+                return False
+            await self._emit_progress(5, 8, 'Полка на платформе (перехват выполнен)')
+
+            wx, wy = self.path_planner.get_window_position()
+            await self._emit_progress(6, 8, 'Перемещение к окну выдачи')
+            if not await self._safe_move_xy(wx, wy):
+                return False
+
+            await self._emit_progress(7, 8, 'Открытие внутренней шторки')
+            await shutters.open_shutter('inner')
+            await self._safe_tray_extend()
+            await self._emit_progress(8, 8, 'Открытие внешней шторки')
+            await shutters.open_shutter('outer')
+
+            self.state = 'waiting_user'
+            return True
+        except Exception as e:
+            await self._emit_error(2, f'Ошибка доставки (кросс-ряд): {e}')
+            self.state = 'error'
+            return False
+
     async def wait_for_user(self, timeout_ms: int = None, book_rfid: str = None) -> bool:
         """Ожидание, пока пользователь/библиотекарь заберёт книгу из окна.
 

@@ -52,5 +52,26 @@ class TestTrayHandoff(unittest.TestCase):
             motors.tray_center = prev
 
 
+class TestComposablePrimitives(unittest.TestCase):
+    def test_grab_and_place(self):
+        from bookcabinet.hardware.motors import motors
+        self.assertTrue(asyncio.run(motors.cross_grab_onto_platform('BACK')))
+        self.assertTrue(asyncio.run(motors.cross_grab_onto_platform('FRONT')))
+        self.assertFalse(asyncio.run(motors.cross_grab_onto_platform('UP')))
+        self.assertTrue(asyncio.run(motors.cross_place_into_rack('FRONT')))
+        self.assertTrue(asyncio.run(motors.cross_place_into_rack('BACK')))
+        self.assertFalse(asyncio.run(motors.cross_place_into_rack('SIDE')))
+
+
+class TestDeliverToWindow(unittest.TestCase):
+    def test_front_delegates_and_back_crossrow(self):
+        from bookcabinet.mechanics.algorithms import algorithms
+        # FRONT — обычный путь (делегирует в take_shelf)
+        self.assertTrue(asyncio.run(algorithms.deliver_to_window('FRONT', 1, 9)))
+        # BACK — кросс-рядная ветка (перехват → окно)
+        self.assertTrue(asyncio.run(algorithms.deliver_to_window('BACK', 0, 5)))
+        self.assertEqual(algorithms.state, 'waiting_user')
+
+
 if __name__ == '__main__':
     unittest.main()
