@@ -37,6 +37,20 @@ class TestTrayHandoff(unittest.TestCase):
         ok = asyncio.run(motors.cross_handoff('sideways'))
         self.assertFalse(ok)
 
+    def test_center_resolver_prefers_live_then_field(self):
+        """CENTER перехвата: живая калибровка → полевой calibration.json → 11300."""
+        from bookcabinet.hardware.motors import motors
+        prev = motors.tray_center
+        try:
+            # живой центр имеет приоритет
+            motors.tray_center = 11199
+            self.assertEqual(motors._tray_center_steps(), 11199)
+            # без живого — берёт полевой calibration.json (center_steps=11233)
+            motors.tray_center = None
+            self.assertEqual(motors._tray_center_steps(), 11233)
+        finally:
+            motors.tray_center = prev
+
 
 if __name__ == '__main__':
     unittest.main()

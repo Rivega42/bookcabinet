@@ -14,6 +14,10 @@ class Motors:
         self.is_moving = False
         self.mock_mode = MOCK_MODE
         self.pi = None
+        # Центр лотка в шагах: измеряется home_tray_with_sensor при калибровке.
+        # Используется перехватом (cross_handoff) как парковочная позиция —
+        # живое значение точнее хардкода 11300 (см. docs/PEREHVAT.md).
+        self.tray_center = None
 
         # Real step counters via pigpio callbacks on STEP pins
         self._step_count_a = 0
@@ -369,6 +373,7 @@ class Motors:
                 return False
             total = fast_steps + slow_steps
             center = total // 2
+            self.tray_center = center   # запоминаем живой центр для перехвата (cross_handoff)
             # 3. В CENTER (DIR=0 от BACK)
             move_steps(0, center, FAST)
             self.position["tray"] = 0   # лоток в центре = рабочее положение покоя
@@ -381,6 +386,18 @@ class Motors:
             except Exception:
                 pass
     
+    def _tray_center_steps(self) -> int:
+        """Центр лотка для перехвата. Приоритет: живая калибровка
+        (self.tray_center) → полевой calibration.json (tray.center_steps) →
+        константа cross_operations_v2 (11300)."""
+        if self.tray_center:
+            return int(self.tray_center)
+        try:
+            from tools import calibration as field_cal
+            return int(field_cal._load()['tray']['center_steps'])
+        except Exception:
+            return 11300
+
     async def cross_handoff(self, direction: str, on_progress=None) -> bool:
         """
         Кросс-рядный ПЕРЕХВАТ полки — порт tools/cross_operations_v2.py
@@ -403,7 +420,7 @@ class Motors:
         L_FRONT = GPIO_PINS["LOCK_FRONT"]; L_REAR = GPIO_PINS["LOCK_REAR"]
         TRAY_FREQ = 12000
         LOCK_DISTANCE = 12600
-        TRAY_CENTER = 11300
+        TRAY_CENTER = self._tray_center_steps()   # живой центр калибровки → фоллбек 11233 → 11300
         LOCK_GRAB_PWM = 1200
         LOCK_RELEASE_PWM = 500
         BACKOFF_STEPS = 1500
