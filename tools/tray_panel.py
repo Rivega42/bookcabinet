@@ -38,6 +38,10 @@ TRAY_CENTER = 11300
 LOCK_DISTANCE = 12600
 EXTRACT_FRONT_FIRST = 16900
 EXTRACT_REAR_FIRST = 16800
+# Кросс-рядные шаги transfer (из shelf_operations.py front_to_rear/rear_to_front V1)
+CROSS_FRONT_TO_REAR_STEP6 = 12500
+CROSS_REAR_TO_FRONT_STEP4 = 12700
+CROSS_REAR_TO_FRONT_STEP6 = 12600
 
 LOCK_GRAB_PWM = 1200
 LOCK_RELEASE_PWM = 500
@@ -235,6 +239,43 @@ def extract_rear():
     log("=== extract_rear DONE — полка на каретке, держит ПЕРЕДНИЙ замок ===")
 
 
+def front_to_rear():
+    """ПЕРЕД→ЗАД: порт shelf_operations.py front_to_rear V1 (полный, 10 шагов transfer)."""
+    log("=== МАКРО front_to_rear (переложить ПЕРЕД→ЗАД) ===")
+    extract_front()                            # → держит ЗАДНИЙ замок (13), pos ~16900
+    lock_release(LOCK_REAR)                    # T1
+    tray_move(LOCK_DISTANCE, 0)                # T2  12600 → FRONT
+    lock_grab(LOCK_FRONT)                       # T3
+    tray_move(LOCK_DISTANCE, 1)                # T4  12600 → BACK
+    lock_release(LOCK_FRONT)                   # T5
+    tray_move(CROSS_FRONT_TO_REAR_STEP6, 0)    # T6  12500 → FRONT
+    lock_grab(LOCK_REAR)                        # T7
+    if not tray_to_endstop(ENDSTOP_BACK):      # T8
+        return
+    lock_release(LOCK_REAR, strong=True)       # T9  укладка в ЗАДНИЙ ряд
+    tray_move(TRAY_CENTER, 0)                  # T10 CENTER → FRONT
+    log("=== front_to_rear DONE — полка в ЗАДНЕМ ряду ===")
+
+
+def rear_to_front():
+    """ЗАД→ПЕРЕД: shelf_operations.py rear_to_front V1 (поле обрывалось на шаге 8;
+    шаги 9–10 дописаны по симметрии — ПРОВЕРИТЬ НА ЖЕЛЕЗЕ)."""
+    log("=== МАКРО rear_to_front (переложить ЗАД→ПЕРЕД) ===")
+    extract_rear()                             # → держит ПЕРЕДНИЙ замок (12)
+    lock_release(LOCK_FRONT)                   # S1
+    tray_move(LOCK_DISTANCE, 1)                # S2  12600 → BACK
+    lock_grab(LOCK_REAR)                        # S3
+    tray_move(CROSS_REAR_TO_FRONT_STEP4, 0)    # S4  12700 → FRONT
+    lock_release(LOCK_REAR)                    # S5
+    tray_move(CROSS_REAR_TO_FRONT_STEP6, 1)    # S6  12600 → BACK
+    lock_grab(LOCK_FRONT)                       # S7
+    if not tray_to_endstop(ENDSTOP_FRONT):     # S8
+        return
+    lock_release(LOCK_FRONT, strong=True)      # S9  укладка в ПЕРЕДНИЙ ряд (дописано)
+    tray_move(TRAY_CENTER, 1)                  # S10 CENTER → BACK (дописано)
+    log("=== rear_to_front DONE — полка в ПЕРЕДНЕМ ряду ===")
+
+
 def cleanup():
     pi.write(TRAY_EN1, 1)
     pi.write(TRAY_EN2, 1)
@@ -333,6 +374,12 @@ HTML = """<!doctype html>
   <button class="macro" onclick="act('extract_rear')">extract_rear<br>из ЗАДНЕГО</button>
 </div>
 
+<h2>Макрос — кросс-ряд (полная перекладка)</h2>
+<div class="grid">
+  <button class="macro" onclick="confirmAct('front_to_rear','ПЕРЕД→ЗАД: полка переедет из переднего ряда в задний. Полка в переднем? Продолжить?')">front → rear<br>ПЕРЕД→ЗАД</button>
+  <button class="macro" onclick="confirmAct('rear_to_front','ЗАД→ПЕРЕД: полка переедет из заднего ряда в передний. Полка в заднем? Продолжить?')">rear → front<br>ЗАД→ПЕРЕД</button>
+</div>
+
 <h2>Заметка в лог</h2>
 <div class="note">
   <input id="note" placeholder="напр. полка села ровно">
@@ -366,6 +413,7 @@ async function act(cmd, arg){
   setBusy(false);
 }
 function jog(n){ act('jog', n); }
+function confirmAct(cmd,msg){ if(confirm(msg)) act(cmd); }
 function jogCustom(sign){ const v=parseInt(document.getElementById('njog').value||'0',10); if(v>0) act('jog', sign*v); }
 function sendNote(){ const el=document.getElementById('note'); if(el.value.trim()){ act('note', el.value.trim()); el.value=''; } }
 async function poll(){
@@ -411,6 +459,10 @@ async def dispatch(cmd, arg):
         await run_blocking(extract_front)
     elif cmd == "extract_rear":
         await run_blocking(extract_rear)
+    elif cmd == "front_to_rear":
+        await run_blocking(front_to_rear)
+    elif cmd == "rear_to_front":
+        await run_blocking(rear_to_front)
     elif cmd == "note":
         log("ЗАМЕТКА: %s" % (arg or ""))
     elif cmd == "stop":
