@@ -243,6 +243,36 @@ def extract_rear():
     log("=== extract_rear DONE — полка на каретке, держит ПЕРЕДНИЙ замок ===")
 
 
+def return_front():
+    """Уложить полку (держит ЗАДНИЙ замок) в ПЕРЕДНИЙ ряд. Порт shelf_operations return_front.
+    Родная функция пульта → читает глобальные TRAY_FREQ и PWM (модификаторы действуют)."""
+    log("=== return_front (уложить в ПЕРЕДНИЙ ряд) ===")
+    tray_move(LOCK_DISTANCE, 0)
+    lock_release(LOCK_REAR)
+    tray_move(LOCK_DISTANCE, 1)
+    lock_grab(LOCK_FRONT)
+    if not tray_to_endstop(ENDSTOP_FRONT):
+        return
+    lock_release(LOCK_FRONT, strong=True)
+    tray_move(TRAY_CENTER, 1)
+    log("=== return_front DONE — полка в переднем ряду, лоток в центре ===")
+
+
+def return_rear():
+    """Уложить полку (держит ПЕРЕДНИЙ замок) в ЗАДНИЙ ряд. Порт shelf_operations return_rear.
+    Родная функция пульта → читает глобальные TRAY_FREQ и PWM (модификаторы действуют)."""
+    log("=== return_rear (уложить в ЗАДНИЙ ряд) ===")
+    tray_move(LOCK_DISTANCE, 1)
+    lock_release(LOCK_FRONT)
+    tray_move(LOCK_DISTANCE, 0)
+    lock_grab(LOCK_REAR)
+    if not tray_to_endstop(ENDSTOP_BACK):
+        return
+    lock_release(LOCK_REAR, strong=True)
+    tray_move(TRAY_CENTER, 0)
+    log("=== return_rear DONE — полка в заднем ряду, лоток в центре ===")
+
+
 def front_to_rear():
     """ПЕРЕД→ЗАД: порт shelf_operations.py front_to_rear V1 (полный, 10 шагов transfer)."""
     log("=== МАКРО front_to_rear (переложить ПЕРЕД→ЗАД) ===")
@@ -443,19 +473,25 @@ def op_goto(addr):
 
 
 def op_take(addr):
-    """Доехать до ячейки и затянуть книгу на каретку (extract по ряду)."""
+    """Доехать до ячейки (goto, XY) и затянуть книгу на каретку РОДНЫМ extract
+    (читает глобальные TRAY_FREQ и PWM — модификаторы действуют)."""
     if not run_field(["tools/goto.py", "800", str(addr)], timeout=120):
         return
-    sub = "extract_rear" if cell_depth(addr) == 2 else "extract_front"
-    run_field(["tools/shelf_operations.py", sub], timeout=180)
+    if cell_depth(addr) == 2:
+        extract_rear()
+    else:
+        extract_front()
 
 
 def op_put(addr):
-    """Доехать до ячейки и выложить книгу в неё (return по ряду)."""
+    """Доехать до ячейки (goto, XY) и выложить книгу РОДНЫМ return
+    (читает глобальные TRAY_FREQ и PWM — модификаторы действуют)."""
     if not run_field(["tools/goto.py", "800", str(addr)], timeout=120):
         return
-    sub = "return_rear" if cell_depth(addr) == 2 else "return_front"
-    run_field(["tools/shelf_operations.py", sub], timeout=180)
+    if cell_depth(addr) == 2:
+        return_rear()
+    else:
+        return_front()
 
 
 def op_shutter(which, action):
@@ -720,7 +756,7 @@ function applyPwm(){
 let pwmTouched=false;
 function renderPwm(p){
   const el=document.getElementById('pwminfo'); if(!el||!p) return;
-  el.textContent='текущий: grab '+p.grab+' / release '+p.release+' (действует на джог, макросы, гид)';
+  el.textContent='текущий: grab '+p.grab+' / release '+p.release+' (джог, макросы, гид, забрать/положить)';
   if(!pwmTouched){ document.getElementById('grabpwm').value=p.grab; document.getElementById('relpwm').value=p.release; }
 }
 ['grabpwm','relpwm'].forEach(function(id){ const e=document.getElementById(id); if(e) e.addEventListener('input',function(){pwmTouched=true;}); });
@@ -728,7 +764,7 @@ function applySpeed(){ const f=parseInt(document.getElementById('speed').value||
 let speedTouched=false;
 function renderSpeed(s){
   const el=document.getElementById('speedinfo'); if(!el||!s) return;
-  el.textContent='текущая: '+s.freq+' Гц (FAST-фаза и jog; медленный подвод к концевику фикс. 1500)';
+  el.textContent='текущая: '+s.freq+' Гц (jog/макросы/гид/забрать/положить; медл. подвод к концевику фикс. 1500)';
   if(!speedTouched){ const e=document.getElementById('speed'); if(e) e.value=s.freq; }
 }
 (function(){ const e=document.getElementById('speed'); if(e) e.addEventListener('input',function(){speedTouched=true;}); })();
