@@ -33,6 +33,7 @@ TRAY_FREQ = 12000
 
 ENDSTOP_FRONT = 7
 ENDSTOP_BACK = 20
+ENDSTOP_FAST_CAP = 12000   # подвод к концевику НЕ быстрее валидированного 12000 (не зависит от модификатора скорости)
 
 LOCK_FRONT = 12
 LOCK_REAR = 13
@@ -153,7 +154,8 @@ def tray_to_endstop(endstop_pin):
     direction = 1 if endstop_pin == ENDSTOP_BACK else 0
     dn = "BACK" if direction == 1 else "FRONT"
     f0, b0 = sensors()
-    period = int(1000000 / TRAY_FREQ)
+    fast = min(TRAY_FREQ, ENDSTOP_FAST_CAP)   # подвод к концевику не быстрее 12000 (надёжный захват датчика)
+    period = int(1000000 / fast)
     pulse = period // 2
     pi.wave_clear()
     pi.wave_add_generic([
@@ -181,7 +183,7 @@ def tray_to_endstop(endstop_pin):
     pi.write(TRAY_DIR, 1 - direction)
     time.sleep(0.01)
     pi.wave_send_repeat(wid)
-    time.sleep(1500 / TRAY_FREQ)
+    time.sleep(1500 / fast)
     pi.wave_tx_stop()
     pi.wave_delete(wid)
 
