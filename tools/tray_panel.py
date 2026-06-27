@@ -305,6 +305,31 @@ def rtf_finish():
     log("=== rtf ЭТАП 2 DONE — полка в ПЕРЕДНЕМ ряду ===")
 
 
+def ftr_grab():
+    """front→rear ЭТАП 1: extract_front + отпуск заднего → точка ручной подгонки T2.
+    Дальше Роман джогом −N (к FRONT) подводит ПЕРЕДНИЙ замок под прорезь и жмёт 'Захват ПЕРЕДНИЙ'."""
+    log("=== ftr ЭТАП 1: extract_front + release REAR (к ручной подгонке T2) ===")
+    extract_front()                # → держит ЗАДНИЙ замок (13)
+    lock_release(LOCK_REAR)        # T1
+    log(">>> ПОДГОНКА: джогом −N (к FRONT) подведи ПЕРЕДНИЙ замок (12) под прорезь,")
+    log(">>> затем 'Захват ПЕРЕДНИЙ' (gf), затем '2. довезти в зад'")
+
+
+def ftr_finish():
+    """front→rear ЭТАП 2: довоз в задний ряд (T4..T10).
+    Ожидает: ПЕРЕДНИЙ замок держит полку (после ручной подгонки + захвата)."""
+    log("=== ftr ЭТАП 2: довоз в ЗАДНИЙ ряд (T4..T10) ===")
+    tray_move(LOCK_DISTANCE, 1)                # T4  12600 → BACK
+    lock_release(LOCK_FRONT)                   # T5
+    tray_move(CROSS_FRONT_TO_REAR_STEP6, 0)    # T6  12500 → FRONT
+    lock_grab(LOCK_REAR)                        # T7
+    if not tray_to_endstop(ENDSTOP_BACK):      # T8
+        return
+    lock_release(LOCK_REAR, strong=True)       # T9
+    tray_move(TRAY_CENTER, 0)                  # T10
+    log("=== ftr ЭТАП 2 DONE — полка в ЗАДНЕМ ряду ===")
+
+
 # ============ ГИД ПО ШАГАМ (вкладка 1): каждый шаг по кнопке, между — джог +/− ============
 GUIDE = {"name": None, "idx": 0, "steps": []}
 
@@ -582,6 +607,13 @@ HTML = """<!doctype html>
 </div>
 <div class="hint">между этапами: джогом <b>+N (к BACK)</b> подведи ЗАДНИЙ замок под прорезь → «Захват ЗАДНИЙ» → этап 2. Подбери число вместо 12600.</div>
 
+<h2>front→rear — ручная подгонка T2</h2>
+<div class="grid">
+  <button class="macro" onclick="confirmAct('ftr_grab','ЭТАП 1: захват из переднего + отпуск заднего. Полка в переднем ряду? Продолжить?')">1. захват<br>(к подгонке)</button>
+  <button class="macro" onclick="confirmAct('ftr_finish','ЭТАП 2: довезти в задний ряд. Передний замок уже держит полку? Продолжить?')">2. довезти<br>в зад</button>
+</div>
+<div class="hint">между этапами: джогом <b>−N (к FRONT)</b> подведи ПЕРЕДНИЙ замок под прорезь → «Захват ПЕРЕДНИЙ» → этап 2. Подбери число вместо 12600.</div>
+
 <h2>Гид по шагам (подгонка каждого движения +/−)</h2>
 <div class="grid">
   <button onclick="confirmAct('guide_front','Гид ПЕРЕД→ЗАД по шагам. Полка в переду? Старт?')">⏯ front→rear</button>
@@ -737,6 +769,10 @@ async def dispatch(cmd, arg):
         await run_blocking(rtf_grab)
     elif cmd == "rtf_finish":
         await run_blocking(rtf_finish)
+    elif cmd == "ftr_grab":
+        await run_blocking(ftr_grab)
+    elif cmd == "ftr_finish":
+        await run_blocking(ftr_finish)
     elif cmd == "guide_front":
         guide_start("front_to_rear")
     elif cmd == "guide_rear":
