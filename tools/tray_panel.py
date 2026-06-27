@@ -17,9 +17,12 @@ import time
 import os
 import sys
 import datetime
+import subprocess
 
 import pigpio
 from aiohttp import web
+
+PROJECT = os.path.expanduser("~/bookcabinet")
 
 # === КОНСТАНТЫ (из shelf_operations.py) ===
 TRAY_STEP = 18
@@ -302,6 +305,138 @@ def rtf_finish():
     log("=== rtf ЭТАП 2 DONE — полка в ПЕРЕДНЕМ ряду ===")
 
 
+# ============ ГИД ПО ШАГАМ (вкладка 1): каждый шаг по кнопке, между — джог +/− ============
+GUIDE = {"name": None, "idx": 0, "steps": []}
+
+
+def _guide_ftr():
+    LF, LR = LOCK_FRONT, LOCK_REAR
+    LD, C = LOCK_DISTANCE, TRAY_CENTER
+    return [
+        ("extract 1: → FRONT концевик", lambda: tray_to_endstop(ENDSTOP_FRONT)),
+        ("extract 2: GRAB передний", lambda: lock_grab(LF)),
+        ("extract 3: 16900 → BACK", lambda: tray_move(EXTRACT_FRONT_FIRST, 1)),
+        ("extract 4: RELEASE передний", lambda: lock_release(LF)),
+        ("extract 5: 12600 → FRONT", lambda: tray_move(LD, 0)),
+        ("extract 6: GRAB задний", lambda: lock_grab(LR)),
+        ("extract 7: 12600 → BACK", lambda: tray_move(LD, 1)),
+        ("transfer 1: RELEASE задний", lambda: lock_release(LR)),
+        ("transfer 2: 12600 → FRONT", lambda: tray_move(LD, 0)),
+        ("transfer 3: GRAB передний", lambda: lock_grab(LF)),
+        ("transfer 4: 12600 → BACK", lambda: tray_move(LD, 1)),
+        ("transfer 5: RELEASE передний", lambda: lock_release(LF)),
+        ("transfer 6: 12500 → FRONT", lambda: tray_move(CROSS_FRONT_TO_REAR_STEP6, 0)),
+        ("transfer 7: GRAB задний", lambda: lock_grab(LR)),
+        ("transfer 8: → BACK концевик", lambda: tray_to_endstop(ENDSTOP_BACK)),
+        ("transfer 9: RELEASE задний strong", lambda: lock_release(LR, True)),
+        ("transfer 10: CENTER → FRONT", lambda: tray_move(C, 0)),
+    ]
+
+
+def _guide_rtf():
+    LF, LR = LOCK_FRONT, LOCK_REAR
+    LD, C = LOCK_DISTANCE, TRAY_CENTER
+    return [
+        ("extract 1: → BACK концевик", lambda: tray_to_endstop(ENDSTOP_BACK)),
+        ("extract 2: GRAB задний", lambda: lock_grab(LR)),
+        ("extract 3: 16800 → FRONT", lambda: tray_move(EXTRACT_REAR_FIRST, 0)),
+        ("extract 4: RELEASE задний", lambda: lock_release(LR)),
+        ("extract 5: 12600 → BACK", lambda: tray_move(LD, 1)),
+        ("extract 6: GRAB передний", lambda: lock_grab(LF)),
+        ("extract 7: 12600 → FRONT", lambda: tray_move(LD, 0)),
+        ("transfer 1: RELEASE передний", lambda: lock_release(LF)),
+        ("transfer 2: %d → BACK (S2)" % REAR_TO_FRONT_S2, lambda: tray_move(REAR_TO_FRONT_S2, 1)),
+        ("transfer 3: GRAB задний", lambda: lock_grab(LR)),
+        ("transfer 4: 12700 → FRONT", lambda: tray_move(CROSS_REAR_TO_FRONT_STEP4, 0)),
+        ("transfer 5: RELEASE задний", lambda: lock_release(LR)),
+        ("transfer 6: 12600 → BACK", lambda: tray_move(CROSS_REAR_TO_FRONT_STEP6, 1)),
+        ("transfer 7: GRAB передний", lambda: lock_grab(LF)),
+        ("transfer 8: → FRONT концевик", lambda: tray_to_endstop(ENDSTOP_FRONT)),
+        ("transfer 9: RELEASE передний strong", lambda: lock_release(LF, True)),
+        ("transfer 10: CENTER → BACK", lambda: tray_move(C, 1)),
+    ]
+
+
+def guide_start(name):
+    GUIDE["steps"] = _guide_ftr() if name == "front_to_rear" else _guide_rtf()
+    GUIDE["name"] = name
+    GUIDE["idx"] = 0
+    log("=== ГИД %s: старт, %d шагов. 'СЛЕД. ШАГ' выполняет; между шагами джог +/− для подгонки ===" % (name, len(GUIDE["steps"])))
+
+
+def guide_next():
+    if not GUIDE["steps"] or GUIDE["idx"] >= len(GUIDE["steps"]):
+        log("ГИД: все шаги выполнены")
+        return
+    i = GUIDE["idx"]
+    label, fn = GUIDE["steps"][i]
+    log("--- ГИД шаг %d/%d: %s ---" % (i + 1, len(GUIDE["steps"]), label))
+    fn()
+    GUIDE["idx"] += 1
+
+
+def guide_state():
+    if not GUIDE["name"]:
+        return {"name": None}
+    total = len(GUIDE["steps"])
+    idx = GUIDE["idx"]
+    nxt = GUIDE["steps"][idx][0] if idx < total else "— конец —"
+    return {"name": GUIDE["name"], "idx": idx, "total": total, "next": nxt}
+
+
+# ============ ВКЛАДКА 2: книгоприём/выдача через полевые скрипты ============
+def run_field(args, timeout=150):
+    """Запустить tools/<script> подпроцессом и записать вывод в лог."""
+    log(">>> RUN: python3 %s" % " ".join(args))
+    try:
+        p = subprocess.run(["python3"] + args, cwd=PROJECT,
+                           capture_output=True, text=True, timeout=timeout)
+        for line in (p.stdout or "").splitlines()[-30:]:
+            log("    " + line)
+        for line in (p.stderr or "").splitlines()[-10:]:
+            log("    [err] " + line)
+        log("<<< RC=%d" % p.returncode)
+        return p.returncode == 0
+    except subprocess.TimeoutExpired:
+        log("<<< ТАЙМАУТ %ss — СТОП" % timeout)
+        return False
+
+
+def cell_depth(addr):
+    try:
+        return int(str(addr).split(".")[0])
+    except Exception:
+        return 1
+
+
+def op_home():
+    run_field(["tools/homing_pigpio.py"], timeout=180)
+
+
+def op_goto(addr):
+    run_field(["tools/goto.py", "800", str(addr)], timeout=120)
+
+
+def op_take(addr):
+    """Доехать до ячейки и затянуть книгу на каретку (extract по ряду)."""
+    if not run_field(["tools/goto.py", "800", str(addr)], timeout=120):
+        return
+    sub = "extract_rear" if cell_depth(addr) == 2 else "extract_front"
+    run_field(["tools/shelf_operations.py", sub], timeout=180)
+
+
+def op_put(addr):
+    """Доехать до ячейки и выложить книгу в неё (return по ряду)."""
+    if not run_field(["tools/goto.py", "800", str(addr)], timeout=120):
+        return
+    sub = "return_rear" if cell_depth(addr) == 2 else "return_front"
+    run_field(["tools/shelf_operations.py", sub], timeout=180)
+
+
+def op_shutter(which, action):
+    run_field(["tools/shutter.py", str(which), str(action)], timeout=40)
+
+
 def cleanup():
     pi.write(TRAY_EN1, 1)
     pi.write(TRAY_EN2, 1)
@@ -350,9 +485,19 @@ HTML = """<!doctype html>
   pre#log { background:#010409; border:1px solid #30363d; border-radius:10px; padding:10px; height:200px;
             overflow:auto; font:12px/1.5 ui-monospace,Consolas,monospace; white-space:pre-wrap; }
   .hint { color:#8b949e; font-size:13px; margin:2px 0 8px; }
+  .tabs { display:flex; gap:6px; margin:0 0 10px; position:sticky; top:0; background:#0d1117; padding:6px 0; z-index:6; }
+  .tabbtn { flex:1; padding:14px; background:#161b22; font-size:15px; }
+  .tabbtn.active { background:#1f6feb; border-color:#1f6feb; }
+  #guideinfo { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:10px; margin:6px 0; font-size:14px; }
 </style></head><body>
 <div id="busy">⏳ выполняется движение…</div>
 
+<div class="tabs">
+  <button id="tabbtn1" class="tabbtn active" onclick="showTab(1)">Лоток / перехват</button>
+  <button id="tabbtn2" class="tabbtn" onclick="showTab(2)">Книгоприём / выдача</button>
+</div>
+
+<div id="tab1">
 <h2>Концевики лотка</h2>
 <div class="sensors">
   <div class="chip" id="sf">FRONT <span class="dot"></span></div>
@@ -413,11 +558,51 @@ HTML = """<!doctype html>
 </div>
 <div class="hint">между этапами: джогом <b>+N (к BACK)</b> подведи ЗАДНИЙ замок под прорезь → «Захват ЗАДНИЙ» → этап 2. Подбери число вместо 12600.</div>
 
+<h2>Гид по шагам (подгонка каждого движения +/−)</h2>
+<div class="grid">
+  <button onclick="confirmAct('guide_front','Гид ПЕРЕД→ЗАД по шагам. Полка в переду? Старт?')">⏯ front→rear</button>
+  <button onclick="confirmAct('guide_rear','Гид ЗАД→ПЕРЕД по шагам. Полка в заду? Старт?')">⏯ rear→front</button>
+</div>
+<div id="guideinfo">гид не запущен</div>
+<button class="macro" style="width:100%;background:#1f6feb" onclick="act('guide_next')">СЛЕД. ШАГ ▶</button>
+<button class="rel" style="width:100%;margin-top:6px" onclick="act('guide_stop')">сброс гида</button>
+<div class="hint">после каждого шага можно джогом <b>+/−</b> (секция «Лоток — шаги» выше) довести платформу, потом «СЛЕД. ШАГ».</div>
+
 <h2>Заметка в лог</h2>
 <div class="note">
   <input id="note" placeholder="напр. полка села ровно">
   <button onclick="sendNote()">Записать</button>
 </div>
+</div><!-- /tab1 -->
+
+<div id="tab2" style="display:none">
+<h2>Адрес ячейки <span style="color:#8b949e;font-weight:400">(depth.rack.shelf)</span></h2>
+<div class="jogrow">
+  <input id="cell" type="text" value="1.1.6">
+  <button onclick="actArg('goto', cellv())">goto (доехать)</button>
+</div>
+<div class="hint"><b>1</b>.x.x — передний ряд, <b>2</b>.x.x — задний (depth определяет extract_front/rear)</div>
+
+<h2>Хоминг</h2>
+<button class="macro" style="width:100%" onclick="confirmAct('home','ХОМИНГ XY (каретка в LEFT+BOTTOM). Продолжить?')">ХОМИНГ XY</button>
+
+<h2>Книга: забрать / положить</h2>
+<div class="grid">
+  <button class="macro" onclick="confirmActArg('take',cellv(),'Доехать до '+cellv()+' и ЗАБРАТЬ книгу (goto+extract). Продолжить?')">забрать из ячейки<br>(goto + extract)</button>
+  <button class="macro" onclick="confirmActArg('put',cellv(),'Доехать до '+cellv()+' и ПОЛОЖИТЬ книгу (goto+return). Продолжить?')">положить в ячейку<br>(goto + return)</button>
+</div>
+
+<h2>Шторки окна</h2>
+<div class="grid three">
+  <button class="endst" onclick="shut('outer','open')">передняя<br>(outer) OPEN</button>
+  <button class="endst" onclick="shut('outer','close')">передняя<br>(outer) CLOSE</button>
+  <button class="endst" onclick="shut('outer','state')">outer<br>state</button>
+  <button class="endst" onclick="shut('inner','open')">задняя<br>(inner) OPEN</button>
+  <button class="endst" onclick="shut('inner','close')">задняя<br>(inner) CLOSE</button>
+  <button class="endst" onclick="shut('inner','state')">inner<br>state</button>
+</div>
+<div class="hint">передняя = outer (к человеку), задняя = inner (внутрь). Если перепутано — скажи, поменяю.</div>
+</div><!-- /tab2 -->
 
 <h2 style="margin-top:16px">Аварийно</h2>
 <button class="stop" onclick="act('stop')">СТОП — снять моторы и замки</button>
@@ -433,6 +618,22 @@ function renderSensors(s){
   document.getElementById('sf').classList.toggle('on', s && s.front===1);
   document.getElementById('sb').classList.toggle('on', s && s.back===1);
 }
+function renderGuide(g){
+  const el=document.getElementById('guideinfo'); if(!el) return;
+  if(!g || !g.name){ el.textContent='гид не запущен'; return; }
+  if(g.idx>=g.total){ el.textContent=g.name+': все '+g.total+' шагов выполнены'; }
+  else { el.textContent=g.name+' — выполнено '+g.idx+'/'+g.total+'.  СЛЕД: '+g.next; }
+}
+function showTab(n){
+  document.getElementById('tab1').style.display = n===1?'block':'none';
+  document.getElementById('tab2').style.display = n===2?'block':'none';
+  document.getElementById('tabbtn1').classList.toggle('active', n===1);
+  document.getElementById('tabbtn2').classList.toggle('active', n===2);
+}
+function cellv(){ return (document.getElementById('cell').value||'').trim(); }
+function actArg(cmd,arg){ act(cmd,arg); }
+function confirmActArg(cmd,arg,msg){ if(confirm(msg)) act(cmd,arg); }
+function shut(which,action){ act('shutter', {which:which, action:action}); }
 async function act(cmd, arg){
   if(busy){ return; }
   setBusy(true);
@@ -441,7 +642,7 @@ async function act(cmd, arg){
                                   body:JSON.stringify({cmd:cmd, arg:arg})});
     const d = await r.json();
     if(d.busy){ /* занято */ }
-    renderLog(d.log); renderSensors(d.sensors);
+    renderLog(d.log); renderSensors(d.sensors); renderGuide(d.guide);
   }catch(e){ console.error(e); }
   setBusy(false);
 }
@@ -450,7 +651,7 @@ function confirmAct(cmd,msg){ if(confirm(msg)) act(cmd); }
 function jogCustom(sign){ const v=parseInt(document.getElementById('njog').value||'0',10); if(v>0) act('jog', sign*v); }
 function sendNote(){ const el=document.getElementById('note'); if(el.value.trim()){ act('note', el.value.trim()); el.value=''; } }
 async function poll(){
-  try{ const r=await fetch('/sensors'); const d=await r.json(); renderSensors(d.sensors); if(!busy) renderLog(d.log); }
+  try{ const r=await fetch('/sensors'); const d=await r.json(); renderSensors(d.sensors); renderGuide(d.guide); if(!busy) renderLog(d.log); }
   catch(e){}
 }
 setInterval(poll, 800); poll();
@@ -500,6 +701,25 @@ async def dispatch(cmd, arg):
         await run_blocking(rtf_grab)
     elif cmd == "rtf_finish":
         await run_blocking(rtf_finish)
+    elif cmd == "guide_front":
+        guide_start("front_to_rear")
+    elif cmd == "guide_rear":
+        guide_start("rear_to_front")
+    elif cmd == "guide_next":
+        await run_blocking(guide_next)
+    elif cmd == "guide_stop":
+        GUIDE["name"] = None; GUIDE["idx"] = 0; GUIDE["steps"] = []
+        log("ГИД остановлен")
+    elif cmd == "home":
+        await run_blocking(op_home)
+    elif cmd == "goto":
+        await run_blocking(op_goto, arg)
+    elif cmd == "take":
+        await run_blocking(op_take, arg)
+    elif cmd == "put":
+        await run_blocking(op_put, arg)
+    elif cmd == "shutter":
+        await run_blocking(op_shutter, (arg or {}).get("which"), (arg or {}).get("action"))
     elif cmd == "note":
         log("ЗАМЕТКА: %s" % (arg or ""))
     elif cmd == "stop":
@@ -518,8 +738,8 @@ async def handle_act(request):
     cmd = data.get("cmd")
     arg = data.get("arg")
     if ACTION_LOCK.locked():
-        return web.json_response({"ok": False, "busy": True,
-                                  "log": RECENT[-40:], "sensors": sensors_dict()})
+        return web.json_response({"ok": False, "busy": True, "log": RECENT[-40:],
+                                  "sensors": sensors_dict(), "guide": guide_state()})
     async with ACTION_LOCK:
         ok = True
         try:
@@ -527,12 +747,13 @@ async def handle_act(request):
         except Exception as e:
             log("ОШИБКА %s: %s" % (cmd, e))
             ok = False
-    return web.json_response({"ok": ok, "log": RECENT[-40:], "sensors": sensors_dict()})
+    return web.json_response({"ok": ok, "log": RECENT[-40:],
+                              "sensors": sensors_dict(), "guide": guide_state()})
 
 
 async def handle_sensors(request):
-    return web.json_response({"sensors": sensors_dict(),
-                              "busy": ACTION_LOCK.locked(), "log": RECENT[-40:]})
+    return web.json_response({"sensors": sensors_dict(), "busy": ACTION_LOCK.locked(),
+                              "log": RECENT[-40:], "guide": guide_state()})
 
 
 async def on_cleanup(app):
