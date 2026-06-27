@@ -442,11 +442,20 @@ def guide_state():
 
 
 # ============ ВКЛАДКА 2: книгоприём/выдача через полевые скрипты ============
-def run_field(args, timeout=150):
+def field_env():
+    """Окружение для полевых подпроцессов: пробрасываем модификаторы скорости/PWM."""
+    e = dict(os.environ)
+    e["TRAY_FREQ"] = str(TRAY_FREQ)
+    e["LOCK_GRAB_PWM"] = str(LOCK_GRAB_PWM)
+    e["LOCK_RELEASE_PWM"] = str(LOCK_RELEASE_PWM)
+    return e
+
+
+def run_field(args, timeout=150, env=None):
     """Запустить tools/<script> подпроцессом и записать вывод в лог."""
     log(">>> RUN: python3 %s" % " ".join(args))
     try:
-        p = subprocess.run(["python3"] + args, cwd=PROJECT,
+        p = subprocess.run(["python3"] + args, cwd=PROJECT, env=env,
                            capture_output=True, text=True, timeout=timeout)
         for line in (p.stdout or "").splitlines()[-30:]:
             log("    " + line)
@@ -475,25 +484,24 @@ def op_goto(addr):
 
 
 def op_take(addr):
-    """Доехать до ячейки (goto, XY) и затянуть книгу на каретку РОДНЫМ extract
-    (читает глобальные TRAY_FREQ и PWM — модификаторы действуют)."""
+    """Доехать до ячейки (goto, XY) и затянуть книгу на каретку.
+    extract — через ВАЛИДИРОВАННЫЙ подпроцесс shelf_operations (свежее pigpio-соединение
+    → чистая остановка по концевику; родной путь после goto проскакивал концевик).
+    Модификаторы скорости/PWM проброшены через env."""
     if not run_field(["tools/goto.py", "800", str(addr)], timeout=120):
         return
-    if cell_depth(addr) == 2:
-        extract_rear()
-    else:
-        extract_front()
+    sub = "extract_rear" if cell_depth(addr) == 2 else "extract_front"
+    run_field(["tools/shelf_operations.py", sub], timeout=180, env=field_env())
 
 
 def op_put(addr):
-    """Доехать до ячейки (goto, XY) и выложить книгу РОДНЫМ return
-    (читает глобальные TRAY_FREQ и PWM — модификаторы действуют)."""
+    """Доехать до ячейки (goto, XY) и выложить книгу.
+    return — через ВАЛИДИРОВАННЫЙ подпроцесс shelf_operations (чистая остановка по концевику).
+    Модификаторы скорости/PWM проброшены через env."""
     if not run_field(["tools/goto.py", "800", str(addr)], timeout=120):
         return
-    if cell_depth(addr) == 2:
-        return_rear()
-    else:
-        return_front()
+    sub = "return_rear" if cell_depth(addr) == 2 else "return_front"
+    run_field(["tools/shelf_operations.py", sub], timeout=180, env=field_env())
 
 
 def op_shutter(which, action):

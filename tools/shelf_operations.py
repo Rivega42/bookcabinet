@@ -51,6 +51,12 @@ CROSS_REAR_TO_FRONT_STEP6 = 12600  # rear_to_front: шаг 6 к BACK
 LOCK_GRAB_PWM = 1200
 LOCK_RELEASE_PWM = 500
 
+# Необязательное переопределение из окружения (пульт tray_panel передаёт модификаторы
+# скорости/PWM). Без env — поведение как было (валидированные значения). Additive, безопасно.
+TRAY_FREQ = int(os.environ.get("TRAY_FREQ", TRAY_FREQ))
+LOCK_GRAB_PWM = int(os.environ.get("LOCK_GRAB_PWM", LOCK_GRAB_PWM))
+LOCK_RELEASE_PWM = int(os.environ.get("LOCK_RELEASE_PWM", LOCK_RELEASE_PWM))
+
 # === ИНИЦИАЛИЗАЦИЯ ===
 pi = pigpio.pi()
 
