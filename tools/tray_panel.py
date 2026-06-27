@@ -479,6 +479,22 @@ def pwm_state():
     return {"grab": LOCK_GRAB_PWM, "release": LOCK_RELEASE_PWM}
 
 
+# ============ Глобальный модификатор СКОРОСТИ лотка ============
+def set_speed(freq):
+    """Глобально переключить частоту шагов лотка (TRAY_FREQ, Гц). Действует на ВСЕ
+    движения лотка пульта (jog, endstop FAST-фаза, макросы, гид). Медленный подвод
+    к концевику (1500 Гц) остаётся фиксированным для точности. Защита от 0/абсурда."""
+    global TRAY_FREQ
+    f = int(freq)
+    f = max(200, min(30000, f))   # не делить на 0, не рвать ремень
+    TRAY_FREQ = f
+    log("СКОРОСТЬ лотка (TRAY_FREQ) → %d Гц (для всех движений пульта)" % TRAY_FREQ)
+
+
+def speed_state():
+    return {"freq": TRAY_FREQ}
+
+
 def cleanup():
     pi.write(TRAY_EN1, 1)
     pi.write(TRAY_EN2, 1)
@@ -587,6 +603,12 @@ HTML = """<!doctype html>
   <button onclick="jog(16900)">+16900</button>
 </div>
 <div class="hint">12600 = LOCK_DISTANCE · 16900/16800 = первый ход extract · 11300 = CENTER</div>
+<div class="jogrow">
+  <span style="font-size:13px;color:#8b949e;white-space:nowrap">Скорость Гц</span>
+  <input id="speed" type="number" value="12000" inputmode="numeric" title="TRAY_FREQ — частота шагов лотка">
+  <button onclick="applySpeed()">применить</button>
+</div>
+<div id="speedinfo" class="hint">текущая: 12000 Гц (FAST-фаза и jog; медленный подвод к концевику фикс. 1500)</div>
 
 <h2>Макрос — полный захват (действие 1)</h2>
 <div class="grid">
@@ -702,6 +724,14 @@ function renderPwm(p){
   if(!pwmTouched){ document.getElementById('grabpwm').value=p.grab; document.getElementById('relpwm').value=p.release; }
 }
 ['grabpwm','relpwm'].forEach(function(id){ const e=document.getElementById(id); if(e) e.addEventListener('input',function(){pwmTouched=true;}); });
+function applySpeed(){ const f=parseInt(document.getElementById('speed').value||'0',10); act('set_speed', {freq:f}); }
+let speedTouched=false;
+function renderSpeed(s){
+  const el=document.getElementById('speedinfo'); if(!el||!s) return;
+  el.textContent='текущая: '+s.freq+' Гц (FAST-фаза и jog; медленный подвод к концевику фикс. 1500)';
+  if(!speedTouched){ const e=document.getElementById('speed'); if(e) e.value=s.freq; }
+}
+(function(){ const e=document.getElementById('speed'); if(e) e.addEventListener('input',function(){speedTouched=true;}); })();
 async function act(cmd, arg){
   if(busy){ return; }
   setBusy(true);
@@ -710,7 +740,7 @@ async function act(cmd, arg){
                                   body:JSON.stringify({cmd:cmd, arg:arg})});
     const d = await r.json();
     if(d.busy){ /* занято */ }
-    renderLog(d.log); renderSensors(d.sensors); renderGuide(d.guide); renderPwm(d.pwm);
+    renderLog(d.log); renderSensors(d.sensors); renderGuide(d.guide); renderPwm(d.pwm); renderSpeed(d.speed);
   }catch(e){ console.error(e); }
   setBusy(false);
 }
@@ -719,7 +749,7 @@ function confirmAct(cmd,msg){ if(confirm(msg)) act(cmd); }
 function jogCustom(sign){ const v=parseInt(document.getElementById('njog').value||'0',10); if(v>0) act('jog', sign*v); }
 function sendNote(){ const el=document.getElementById('note'); if(el.value.trim()){ act('note', el.value.trim()); el.value=''; } }
 async function poll(){
-  try{ const r=await fetch('/sensors'); const d=await r.json(); renderSensors(d.sensors); renderGuide(d.guide); renderPwm(d.pwm); if(!busy) renderLog(d.log); }
+  try{ const r=await fetch('/sensors'); const d=await r.json(); renderSensors(d.sensors); renderGuide(d.guide); renderPwm(d.pwm); renderSpeed(d.speed); if(!busy) renderLog(d.log); }
   catch(e){}
 }
 setInterval(poll, 800); poll();
@@ -794,6 +824,8 @@ async def dispatch(cmd, arg):
         await run_blocking(op_shutter, (arg or {}).get("which"), (arg or {}).get("action"))
     elif cmd == "set_pwm":
         set_pwm((arg or {}).get("grab"), (arg or {}).get("release"))
+    elif cmd == "set_speed":
+        set_speed((arg or {}).get("freq"))
     elif cmd == "note":
         log("ЗАМЕТКА: %s" % (arg or ""))
     elif cmd == "stop":
@@ -822,7 +854,7 @@ async def handle_act(request):
             log("ОШИБКА %s: %s" % (cmd, e))
             ok = False
     return web.json_response({"ok": ok, "log": RECENT[-40:], "sensors": sensors_dict(),
-                              "guide": guide_state(), "pwm": pwm_state()})
+                              "guide": guide_state(), "pwm": pwm_state(), "speed": speed_state()})
 
 
 async def handle_sensors(request):
