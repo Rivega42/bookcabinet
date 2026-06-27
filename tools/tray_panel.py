@@ -883,7 +883,8 @@ async def handle_act(request):
     arg = data.get("arg")
     if ACTION_LOCK.locked():
         return web.json_response({"ok": False, "busy": True, "log": RECENT[-40:],
-                                  "sensors": sensors_dict(), "guide": guide_state()})
+                                  "sensors": sensors_dict(), "guide": guide_state(),
+                                  "pwm": pwm_state(), "speed": speed_state()})
     async with ACTION_LOCK:
         ok = True
         try:
@@ -897,7 +898,8 @@ async def handle_act(request):
 
 async def handle_sensors(request):
     return web.json_response({"sensors": sensors_dict(), "busy": ACTION_LOCK.locked(),
-                              "log": RECENT[-40:], "guide": guide_state(), "pwm": pwm_state()})
+                              "log": RECENT[-40:], "guide": guide_state(),
+                              "pwm": pwm_state(), "speed": speed_state()})
 
 
 async def on_cleanup(app):
