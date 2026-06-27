@@ -437,6 +437,23 @@ def op_shutter(which, action):
     run_field(["tools/shutter.py", str(which), str(action)], timeout=40)
 
 
+# ============ Глобальный модификатор PWM замков ============
+def set_pwm(grab=None, release=None):
+    """Глобально переключить PWM захвата/отпуска. Действует на ВСЕ замочные операции
+    пульта (джог, макросы, гид). На подпроцессы вкладки 2 (полевые скрипты) НЕ влияет."""
+    global LOCK_GRAB_PWM, LOCK_RELEASE_PWM
+    if grab not in (None, ""):
+        LOCK_GRAB_PWM = int(grab)
+        log("PWM ЗАХВАТА (GRAB) замков → %d (для всех операций пульта)" % LOCK_GRAB_PWM)
+    if release not in (None, ""):
+        LOCK_RELEASE_PWM = int(release)
+        log("PWM ОТПУСКА (RELEASE) замков → %d" % LOCK_RELEASE_PWM)
+
+
+def pwm_state():
+    return {"grab": LOCK_GRAB_PWM, "release": LOCK_RELEASE_PWM}
+
+
 def cleanup():
     pi.write(TRAY_EN1, 1)
     pi.write(TRAY_EN2, 1)
@@ -505,6 +522,13 @@ HTML = """<!doctype html>
 </div>
 
 <h2>Замки</h2>
+<div class="jogrow">
+  <span style="font-size:13px;color:#8b949e;white-space:nowrap">PWM захв/отп</span>
+  <input id="grabpwm" type="number" value="1200" inputmode="numeric" title="PWM захвата (GRAB)">
+  <input id="relpwm" type="number" value="500" inputmode="numeric" title="PWM отпуска (RELEASE)">
+  <button onclick="applyPwm()">применить</button>
+</div>
+<div id="pwminfo" class="hint">текущий: grab 1200 / release 500 (действует на джог, макросы, гид)</div>
 <div class="grid three">
   <button class="grab" onclick="act('grab_front')">Захват<br>ПЕРЕДНИЙ</button>
   <button class="rel"  onclick="act('rel_front')">Отпуск<br>передний</button>
@@ -634,6 +658,18 @@ function cellv(){ return (document.getElementById('cell').value||'').trim(); }
 function actArg(cmd,arg){ act(cmd,arg); }
 function confirmActArg(cmd,arg,msg){ if(confirm(msg)) act(cmd,arg); }
 function shut(which,action){ act('shutter', {which:which, action:action}); }
+function applyPwm(){
+  const g=parseInt(document.getElementById('grabpwm').value||'0',10);
+  const r=parseInt(document.getElementById('relpwm').value||'0',10);
+  act('set_pwm', {grab:g, release:r});
+}
+let pwmTouched=false;
+function renderPwm(p){
+  const el=document.getElementById('pwminfo'); if(!el||!p) return;
+  el.textContent='текущий: grab '+p.grab+' / release '+p.release+' (действует на джог, макросы, гид)';
+  if(!pwmTouched){ document.getElementById('grabpwm').value=p.grab; document.getElementById('relpwm').value=p.release; }
+}
+['grabpwm','relpwm'].forEach(function(id){ const e=document.getElementById(id); if(e) e.addEventListener('input',function(){pwmTouched=true;}); });
 async function act(cmd, arg){
   if(busy){ return; }
   setBusy(true);
@@ -642,7 +678,7 @@ async function act(cmd, arg){
                                   body:JSON.stringify({cmd:cmd, arg:arg})});
     const d = await r.json();
     if(d.busy){ /* занято */ }
-    renderLog(d.log); renderSensors(d.sensors); renderGuide(d.guide);
+    renderLog(d.log); renderSensors(d.sensors); renderGuide(d.guide); renderPwm(d.pwm);
   }catch(e){ console.error(e); }
   setBusy(false);
 }
@@ -651,7 +687,7 @@ function confirmAct(cmd,msg){ if(confirm(msg)) act(cmd); }
 function jogCustom(sign){ const v=parseInt(document.getElementById('njog').value||'0',10); if(v>0) act('jog', sign*v); }
 function sendNote(){ const el=document.getElementById('note'); if(el.value.trim()){ act('note', el.value.trim()); el.value=''; } }
 async function poll(){
-  try{ const r=await fetch('/sensors'); const d=await r.json(); renderSensors(d.sensors); renderGuide(d.guide); if(!busy) renderLog(d.log); }
+  try{ const r=await fetch('/sensors'); const d=await r.json(); renderSensors(d.sensors); renderGuide(d.guide); renderPwm(d.pwm); if(!busy) renderLog(d.log); }
   catch(e){}
 }
 setInterval(poll, 800); poll();
@@ -720,6 +756,8 @@ async def dispatch(cmd, arg):
         await run_blocking(op_put, arg)
     elif cmd == "shutter":
         await run_blocking(op_shutter, (arg or {}).get("which"), (arg or {}).get("action"))
+    elif cmd == "set_pwm":
+        set_pwm((arg or {}).get("grab"), (arg or {}).get("release"))
     elif cmd == "note":
         log("ЗАМЕТКА: %s" % (arg or ""))
     elif cmd == "stop":
@@ -747,13 +785,13 @@ async def handle_act(request):
         except Exception as e:
             log("ОШИБКА %s: %s" % (cmd, e))
             ok = False
-    return web.json_response({"ok": ok, "log": RECENT[-40:],
-                              "sensors": sensors_dict(), "guide": guide_state()})
+    return web.json_response({"ok": ok, "log": RECENT[-40:], "sensors": sensors_dict(),
+                              "guide": guide_state(), "pwm": pwm_state()})
 
 
 async def handle_sensors(request):
     return web.json_response({"sensors": sensors_dict(), "busy": ACTION_LOCK.locked(),
-                              "log": RECENT[-40:], "guide": guide_state()})
+                              "log": RECENT[-40:], "guide": guide_state(), "pwm": pwm_state()})
 
 
 async def on_cleanup(app):
