@@ -276,6 +276,31 @@ def rear_to_front():
     log("=== rear_to_front DONE — полка в ПЕРЕДНЕМ ряду ===")
 
 
+def rtf_grab():
+    """rear→front ЭТАП 1: extract_rear + отпуск переднего → точка ручной подгонки S2.
+    Дальше Роман джогом подводит ЗАДНИЙ замок под прорезь и жмёт 'Захват ЗАДНИЙ'."""
+    log("=== rtf ЭТАП 1: extract_rear + release FRONT (к ручной подгонке S2) ===")
+    extract_rear()                 # → держит ПЕРЕДНИЙ замок (12)
+    lock_release(LOCK_FRONT)       # S1
+    log(">>> ПОДГОНКА: джогом +N (к BACK) подведи ЗАДНИЙ замок (13) под прорезь,")
+    log(">>> затем 'Захват ЗАДНИЙ' (gr), затем '2. довезти в перёд'")
+
+
+def rtf_finish():
+    """rear→front ЭТАП 2: довоз в передний ряд (S4..S10).
+    Ожидает: ЗАДНИЙ замок держит полку (после ручной подгонки + захвата)."""
+    log("=== rtf ЭТАП 2: довоз в ПЕРЕДНИЙ ряд (S4..S10) ===")
+    tray_move(CROSS_REAR_TO_FRONT_STEP4, 0)    # S4  12700 → FRONT
+    lock_release(LOCK_REAR)                    # S5
+    tray_move(CROSS_REAR_TO_FRONT_STEP6, 1)    # S6  12600 → BACK
+    lock_grab(LOCK_FRONT)                       # S7
+    if not tray_to_endstop(ENDSTOP_FRONT):     # S8
+        return
+    lock_release(LOCK_FRONT, strong=True)      # S9
+    tray_move(TRAY_CENTER, 1)                  # S10
+    log("=== rtf ЭТАП 2 DONE — полка в ПЕРЕДНЕМ ряду ===")
+
+
 def cleanup():
     pi.write(TRAY_EN1, 1)
     pi.write(TRAY_EN2, 1)
@@ -380,6 +405,13 @@ HTML = """<!doctype html>
   <button class="macro" onclick="confirmAct('rear_to_front','ЗАД→ПЕРЕД: полка переедет из заднего ряда в передний. Полка в заднем? Продолжить?')">rear → front<br>ЗАД→ПЕРЕД</button>
 </div>
 
+<h2>rear→front — ручная подгонка S2</h2>
+<div class="grid">
+  <button class="macro" onclick="confirmAct('rtf_grab','ЭТАП 1: захват из заднего + отпуск переднего. Полка в заднем ряду? Продолжить?')">1. захват<br>(к подгонке)</button>
+  <button class="macro" onclick="confirmAct('rtf_finish','ЭТАП 2: довезти в передний ряд. Задний замок уже держит полку? Продолжить?')">2. довезти<br>в перёд</button>
+</div>
+<div class="hint">между этапами: джогом <b>+N (к BACK)</b> подведи ЗАДНИЙ замок под прорезь → «Захват ЗАДНИЙ» → этап 2. Подбери число вместо 12600.</div>
+
 <h2>Заметка в лог</h2>
 <div class="note">
   <input id="note" placeholder="напр. полка села ровно">
@@ -463,6 +495,10 @@ async def dispatch(cmd, arg):
         await run_blocking(front_to_rear)
     elif cmd == "rear_to_front":
         await run_blocking(rear_to_front)
+    elif cmd == "rtf_grab":
+        await run_blocking(rtf_grab)
+    elif cmd == "rtf_finish":
+        await run_blocking(rtf_finish)
     elif cmd == "note":
         log("ЗАМЕТКА: %s" % (arg or ""))
     elif cmd == "stop":
