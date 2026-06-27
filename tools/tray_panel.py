@@ -42,6 +42,7 @@ EXTRACT_REAR_FIRST = 16800
 CROSS_FRONT_TO_REAR_STEP6 = 12500
 CROSS_REAR_TO_FRONT_STEP4 = 12700
 CROSS_REAR_TO_FRONT_STEP6 = 12600
+REAR_TO_FRONT_S2 = 13100   # откалибровано на железе 2026-06-27 (поле 12600 не доезжало на 500)
 
 LOCK_GRAB_PWM = 1200
 LOCK_RELEASE_PWM = 500
@@ -263,7 +264,7 @@ def rear_to_front():
     log("=== МАКРО rear_to_front (переложить ЗАД→ПЕРЕД) ===")
     extract_rear()                             # → держит ПЕРЕДНИЙ замок (12)
     lock_release(LOCK_FRONT)                   # S1
-    tray_move(LOCK_DISTANCE, 1)                # S2  12600 → BACK
+    tray_move(REAR_TO_FRONT_S2, 1)             # S2  13100 → BACK (откалибровано)
     lock_grab(LOCK_REAR)                        # S3
     tray_move(CROSS_REAR_TO_FRONT_STEP4, 0)    # S4  12700 → FRONT
     lock_release(LOCK_REAR)                    # S5

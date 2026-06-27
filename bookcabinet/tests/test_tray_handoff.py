@@ -1,7 +1,7 @@
 """
-Кросс-рядный перехват полки (motors.cross_handoff) — порт shelf_operations.py
-extract_*/return_* (field-validated, 2 перехвата). Мок проверяет ТОЛЬКО порядок
-14 шагов (7 extract + 7 return) и направления — физику ловит железо.
+Кросс-рядный перенос полки (motors.cross_handoff) — порт shelf_operations.py
+front_to_rear / rear_to_front (field-validated на железе 2026-06-27). Мок проверяет
+ТОЛЬКО порядок 17 шагов (7 extract + 10 transfer) — физику/калибровку ловит железо.
 """
 import asyncio
 import unittest
@@ -21,17 +21,17 @@ class TestTrayHandoff(unittest.TestCase):
     def test_rear_to_front_sequence(self):
         ok, events = self._run('rear_to_front')
         self.assertTrue(ok)
-        # ровно 14 шагов (7 extract + 7 return), по порядку 1..14
-        self.assertEqual([e['step'] for e in events], list(range(1, 15)))
-        self.assertTrue(all(e['total'] == 14 for e in events))
+        # ровно 17 шагов (7 extract + 10 transfer), по порядку 1..17
+        self.assertEqual([e['step'] for e in events], list(range(1, 18)))
+        self.assertTrue(all(e['total'] == 17 for e in events))
         self.assertTrue(all(e['operation'] == 'HANDOFF' for e in events))
-        # ДВА перехвата на захвате (первый длинный ход + LOCK_DISTANCE) + перехват на укладке
-        self.assertGreaterEqual(sum('Перехват' in e['message'] for e in events), 3)
+        # откалиброванный S2=13100 присутствует в transfer-шаге
+        self.assertTrue(any('13100' in e['message'] for e in events))
 
     def test_front_to_rear_sequence(self):
         ok, events = self._run('front_to_rear')
         self.assertTrue(ok)
-        self.assertEqual([e['step'] for e in events], list(range(1, 15)))
+        self.assertEqual([e['step'] for e in events], list(range(1, 18)))
 
     def test_invalid_direction(self):
         from bookcabinet.hardware.motors import motors

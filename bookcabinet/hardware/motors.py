@@ -412,6 +412,11 @@ class Motors:
     # shelf_operations.py (field-validated) делает 2 перехвата с длинным первым ходом.
     _HF_EXTRACT_FRONT_FIRST = 16900  # extract_front шаг 3 (к BACK)
     _HF_EXTRACT_REAR_FIRST = 16800   # extract_rear шаг 3 (к FRONT) = REAR_HANDOFF_REAR_FROM_BACK
+    # Кросс-рядный transfer (после extract_*). Выверено на железе 2026-06-27 (tray_panel).
+    _HF_FTR_STEP6 = 12500            # front_to_rear T6 (12500→FRONT)
+    _HF_RTF_S2 = 13100              # rear_to_front S2 (поле 12600 НЕ доезжало на 500 → 13100)
+    _HF_RTF_S4 = 12700              # rear_to_front S4 (12700→FRONT)
+    _HF_RTF_S6 = 12600             # rear_to_front S6 (12600→BACK)
 
     def _tray_setup_pins(self):
         import pigpio
@@ -602,27 +607,106 @@ class Motors:
             except Exception:
                 pass
 
+    async def _transfer_to_rear(self, on_progress=None, step_base: int = 7, total: int = 17) -> bool:
+        """T1–T10: переложить полку (на каретке, держит ЗАДНИЙ замок после extract_front)
+        в ЗАДНИЙ ряд. Порт shelf_operations.py front_to_rear — подтверждён на железе 2026-06-27."""
+        L_FRONT = GPIO_PINS["LOCK_FRONT"]; L_REAR = GPIO_PINS["LOCK_REAR"]
+        BACK = GPIO_PINS["SENSOR_TRAY_BEGIN"]
+        LD = self._HF_LOCK_DISTANCE; center = self._tray_center_steps()
+        steps = ["Отпуск заднего", "Лоток LOCK_DISTANCE→FRONT", "Захват переднего",
+                 "Лоток LOCK_DISTANCE→BACK", "Отпуск переднего", "Лоток 12500→FRONT",
+                 "Захват заднего", "Лоток к BACK концевику", "Укладка в задний (strong)",
+                 "Лоток в CENTER"]
+        if self.mock_mode or not self.pi:
+            for i, m in enumerate(steps, 1):
+                await self._hf_progress(on_progress, step_base + i, total, m); await asyncio.sleep(0.01)
+            self.position["tray"] = 0
+            return True
+        self._tray_setup_pins()
+        try:
+            await self._hf_progress(on_progress, step_base + 1, total, steps[0]); self._tray_lock(L_REAR, self._HF_RELEASE_PWM)
+            await self._hf_progress(on_progress, step_base + 2, total, steps[1]); self._tray_move_steps(0, LD, self._HF_FREQ)
+            await self._hf_progress(on_progress, step_base + 3, total, steps[2]); self._tray_lock(L_FRONT, self._HF_GRAB_PWM)
+            await self._hf_progress(on_progress, step_base + 4, total, steps[3]); self._tray_move_steps(1, LD, self._HF_FREQ)
+            await self._hf_progress(on_progress, step_base + 5, total, steps[4]); self._tray_lock(L_FRONT, self._HF_RELEASE_PWM)
+            await self._hf_progress(on_progress, step_base + 6, total, steps[5]); self._tray_move_steps(0, self._HF_FTR_STEP6, self._HF_FREQ)
+            await self._hf_progress(on_progress, step_base + 7, total, steps[6]); self._tray_lock(L_REAR, self._HF_GRAB_PWM)
+            await self._hf_progress(on_progress, step_base + 8, total, steps[7])
+            if not await self._tray_to_endstop(1, BACK):
+                return False
+            await self._hf_progress(on_progress, step_base + 9, total, steps[8]); self._tray_lock(L_REAR, self._HF_RELEASE_PWM, strong=True)
+            await self._hf_progress(on_progress, step_base + 10, total, steps[9]); self._tray_move_steps(0, center, self._HF_FREQ)
+            self.position["tray"] = 0
+            return True
+        except Exception:
+            return False
+        finally:
+            self.pi.write(GPIO_PINS["TRAY_ENA_1"], 1); self.pi.write(GPIO_PINS["TRAY_ENA_2"], 1)
+            try:
+                self.pi.set_servo_pulsewidth(L_FRONT, 0); self.pi.set_servo_pulsewidth(L_REAR, 0); self.pi.wave_clear()
+            except Exception:
+                pass
+
+    async def _transfer_to_front(self, on_progress=None, step_base: int = 7, total: int = 17) -> bool:
+        """S1–S10: переложить полку (на каретке, держит ПЕРЕДНИЙ замок после extract_rear)
+        в ПЕРЕДНИЙ ряд. Порт shelf_operations.py rear_to_front; S2=13100 откалибровано
+        на железе 2026-06-27 (поле 12600 не доезжало); хвост S9–S10 выверен на железе."""
+        L_FRONT = GPIO_PINS["LOCK_FRONT"]; L_REAR = GPIO_PINS["LOCK_REAR"]
+        FRONT = GPIO_PINS["SENSOR_TRAY_END"]
+        LD = self._HF_LOCK_DISTANCE; center = self._tray_center_steps()
+        steps = ["Отпуск переднего", f"Лоток {self._HF_RTF_S2}→BACK", "Захват заднего",
+                 "Лоток 12700→FRONT", "Отпуск заднего", "Лоток 12600→BACK", "Захват переднего",
+                 "Лоток к FRONT концевику", "Укладка в передний (strong)", "Лоток в CENTER"]
+        if self.mock_mode or not self.pi:
+            for i, m in enumerate(steps, 1):
+                await self._hf_progress(on_progress, step_base + i, total, m); await asyncio.sleep(0.01)
+            self.position["tray"] = 0
+            return True
+        self._tray_setup_pins()
+        try:
+            await self._hf_progress(on_progress, step_base + 1, total, steps[0]); self._tray_lock(L_FRONT, self._HF_RELEASE_PWM)
+            await self._hf_progress(on_progress, step_base + 2, total, steps[1]); self._tray_move_steps(1, self._HF_RTF_S2, self._HF_FREQ)
+            await self._hf_progress(on_progress, step_base + 3, total, steps[2]); self._tray_lock(L_REAR, self._HF_GRAB_PWM)
+            await self._hf_progress(on_progress, step_base + 4, total, steps[3]); self._tray_move_steps(0, self._HF_RTF_S4, self._HF_FREQ)
+            await self._hf_progress(on_progress, step_base + 5, total, steps[4]); self._tray_lock(L_REAR, self._HF_RELEASE_PWM)
+            await self._hf_progress(on_progress, step_base + 6, total, steps[5]); self._tray_move_steps(1, self._HF_RTF_S6, self._HF_FREQ)
+            await self._hf_progress(on_progress, step_base + 7, total, steps[6]); self._tray_lock(L_FRONT, self._HF_GRAB_PWM)
+            await self._hf_progress(on_progress, step_base + 8, total, steps[7])
+            if not await self._tray_to_endstop(0, FRONT):
+                return False
+            await self._hf_progress(on_progress, step_base + 9, total, steps[8]); self._tray_lock(L_FRONT, self._HF_RELEASE_PWM, strong=True)
+            await self._hf_progress(on_progress, step_base + 10, total, steps[9]); self._tray_move_steps(1, center, self._HF_FREQ)
+            self.position["tray"] = 0
+            return True
+        except Exception:
+            return False
+        finally:
+            self.pi.write(GPIO_PINS["TRAY_ENA_1"], 1); self.pi.write(GPIO_PINS["TRAY_ENA_2"], 1)
+            try:
+                self.pi.set_servo_pulsewidth(L_FRONT, 0); self.pi.set_servo_pulsewidth(L_REAR, 0); self.pi.wave_clear()
+            except Exception:
+                pass
+
     async def cross_handoff(self, direction: str, on_progress=None) -> bool:
         """
-        Кросс-рядный перенос полки между СТОЙКАМИ одной колонки — композиция
-        extract_* + return_* (field-validated shelf_operations.py). 14 шагов:
-        grab_onto_platform(1–7) + place_into_rack(8–14).
+        Кросс-рядный перенос полки между СТОЙКАМИ одной колонки.
+        = extract_* (полный захват на каретку) + transfer_* (перекладка в др. ряд).
+        Порт shelf_operations.py front_to_rear / rear_to_front, ВЫВЕРЕНО НА ЖЕЛЕЗЕ 2026-06-27
+        (tray_panel): front_to_rear как поле; rear_to_front с откалиброванным S2=13100. 17 шагов.
 
         direction:
-          'rear_to_front' — из ЗАДНЕЙ стойки в ПЕРЕДНЮЮ (extract_rear + return_front),
-          'front_to_rear' — из передней в заднюю (extract_front + return_rear).
-
-        ⚠️ Эталон — shelf_operations.py extract_*/return_*, валидировано на железе.
+          'front_to_rear' — из передней стойки в заднюю,
+          'rear_to_front' — из задней в переднюю.
         """
-        if direction == 'rear_to_front':
-            from_row, to_row = 'BACK', 'FRONT'
-        elif direction == 'front_to_rear':
-            from_row, to_row = 'FRONT', 'BACK'
-        else:
-            return False
-        if not await self.cross_grab_onto_platform(from_row, on_progress, step_base=0, total=14):
-            return False
-        return await self.cross_place_into_rack(to_row, on_progress, step_base=7, total=14)
+        if direction == 'front_to_rear':
+            if not await self.cross_grab_onto_platform('FRONT', on_progress, step_base=0, total=17):
+                return False
+            return await self._transfer_to_rear(on_progress, step_base=7, total=17)
+        elif direction == 'rear_to_front':
+            if not await self.cross_grab_onto_platform('BACK', on_progress, step_base=0, total=17):
+                return False
+            return await self._transfer_to_front(on_progress, step_base=7, total=17)
+        return False
 
     async def test_motor(self, motor: str, direction: int, steps: int = 500) -> bool:
         """Test individual motor"""
