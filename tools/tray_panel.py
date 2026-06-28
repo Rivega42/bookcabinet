@@ -362,6 +362,49 @@ def ftr_finish():
     log("=== ftr ЭТАП 2 DONE — полка в ЗАДНЕМ ряду ===")
 
 
+# ============ УКЛАДКА В ЯЧЕЙКУ — РУЧНОЙ ПОДВОД (баг: гружёный флажок пролетает датчик) ============
+# Полка УЖЕ на каретке (после extract). Авто-tray_to_endstop под нагрузкой проскакивает,
+# поэтому подвод к концевику делаем ВРУЧНУЮ джогом по живому датчику, потом «досадить».
+def place_front_approach():
+    """Положить в ПЕРЕДНИЙ ряд, этап 1: довести полку к переду (return_front шаги 1-4),
+    БЕЗ авто-концевика. Дальше Роман джогом −N (к FRONT) доводит до FRONT концевика."""
+    log("=== положить ПЕРЁД этап 1 (подвод, без авто-концевика) ===")
+    tray_move(LOCK_DISTANCE, 0)   # 12600 FRONT
+    lock_release(LOCK_REAR)
+    tray_move(LOCK_DISTANCE, 1)   # 12600 BACK
+    lock_grab(LOCK_FRONT)
+    log(">>> РУЧНОЙ ПОДВОД: джогом −N (к FRONT) веди лоток к концевику, СЛЕДИ за датчиком FRONT;")
+    log(">>> останови, когда FRONT=1 (флажок на датчике), затем «досадить (перёд)»")
+
+
+def place_front_seat():
+    """Положить в ПЕРЕДНИЙ ряд, этап 2: укладка (release strong) + центр (return_front 6-7)."""
+    log("=== положить ПЕРЁД этап 2 (укладка strong + центр) ===")
+    lock_release(LOCK_FRONT, strong=True)
+    tray_move(TRAY_CENTER, 1)
+    log("=== положено в ПЕРЕДНИЙ ряд ===")
+
+
+def place_rear_approach():
+    """Положить в ЗАДНИЙ ряд, этап 1: довести полку к заду (return_rear шаги 1-4),
+    БЕЗ авто-концевика. Дальше джогом +N (к BACK) до BACK концевика."""
+    log("=== положить ЗАД этап 1 (подвод, без авто-концевика) ===")
+    tray_move(LOCK_DISTANCE, 1)   # 12600 BACK
+    lock_release(LOCK_FRONT)
+    tray_move(LOCK_DISTANCE, 0)   # 12600 FRONT
+    lock_grab(LOCK_REAR)
+    log(">>> РУЧНОЙ ПОДВОД: джогом +N (к BACK) веди лоток к концевику, СЛЕДИ за датчиком BACK;")
+    log(">>> останови, когда BACK=1 (флажок на датчике), затем «досадить (зад)»")
+
+
+def place_rear_seat():
+    """Положить в ЗАДНИЙ ряд, этап 2: укладка (release strong) + центр (return_rear 6-7)."""
+    log("=== положить ЗАД этап 2 (укладка strong + центр) ===")
+    lock_release(LOCK_REAR, strong=True)
+    tray_move(TRAY_CENTER, 0)
+    log("=== положено в ЗАДНИЙ ряд ===")
+
+
 # ============ ГИД ПО ШАГАМ (вкладка 1): каждый шаг по кнопке, между — джог +/− ============
 GUIDE = {"name": None, "idx": 0, "steps": []}
 
@@ -682,6 +725,16 @@ HTML = """<!doctype html>
 </div>
 <div class="hint">между этапами: джогом <b>−N (к FRONT)</b> подведи ПЕРЕДНИЙ замок под прорезь → «Захват ПЕРЕДНИЙ» → этап 2. Подбери число вместо 12600.</div>
 
+<h2>УКЛАДКА в ячейку — ручной подвод к концевику</h2>
+<div class="hint">для бага «гружёный флажок пролетает датчик». Полка ДОЛЖНА быть на каретке (после «забрать»). Этап 1 подводит без авто-концевика → джогом доведи до концевика по живому датчику сверху → этап 2 досаживает.</div>
+<div class="grid">
+  <button class="macro" onclick="confirmAct('place_front_approach','Положить ПЕРЁД, этап 1 (подвод). Полка на каретке? Продолжить?')">перёд: 1.&nbsp;подвод</button>
+  <button class="macro" onclick="confirmAct('place_front_seat','Положить ПЕРЁД, этап 2 (досадить). Лоток у FRONT концевика (FRONT=1)?')">перёд: 2.&nbsp;досадить</button>
+  <button class="macro" onclick="confirmAct('place_rear_approach','Положить ЗАД, этап 1 (подвод). Полка на каретке? Продолжить?')">зад: 1.&nbsp;подвод</button>
+  <button class="macro" onclick="confirmAct('place_rear_seat','Положить ЗАД, этап 2 (досадить). Лоток у BACK концевика (BACK=1)?')">зад: 2.&nbsp;досадить</button>
+</div>
+<div class="hint">перёд: между этапами джог <b>−N (к FRONT)</b> до FRONT=1. зад: джог <b>+N (к BACK)</b> до BACK=1. Сумму джога я заберу из лога → калиброванный подвод в код.</div>
+
 <h2>Гид по шагам (подгонка каждого движения +/−)</h2>
 <div class="grid">
   <button onclick="confirmAct('guide_front','Гид ПЕРЕД→ЗАД по шагам. Полка в переду? Старт?')">⏯ front→rear</button>
@@ -849,6 +902,14 @@ async def dispatch(cmd, arg):
         await run_blocking(ftr_grab)
     elif cmd == "ftr_finish":
         await run_blocking(ftr_finish)
+    elif cmd == "place_front_approach":
+        await run_blocking(place_front_approach)
+    elif cmd == "place_front_seat":
+        await run_blocking(place_front_seat)
+    elif cmd == "place_rear_approach":
+        await run_blocking(place_rear_approach)
+    elif cmd == "place_rear_seat":
+        await run_blocking(place_rear_seat)
     elif cmd == "guide_front":
         guide_start("front_to_rear")
     elif cmd == "guide_rear":
