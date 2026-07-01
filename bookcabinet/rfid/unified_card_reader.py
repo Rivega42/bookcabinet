@@ -10,7 +10,9 @@ Unified Card Reader - параллельный опрос ACR1281U-C (NFC) и IQ
 Нормализация UID (по референсу C#):
 - Удаление разделителей: : - пробелы
 - Приведение к верхнему регистру
-- Для UHF: обрезка EPC до 24 символов (UhfCardUidLength)
+- Для UHF: передаём ПОЛНЫЙ EPC без усечения (усечение до 24 символов
+  схлопывало две карты с общим 96-битным префиксом в одну личность —
+  issue #116). Дальнейшая нормализация — на стороне Biblio (G7, biblio#417).
 
 Использование:
     from rfid.unified_card_reader import unified_reader
@@ -32,7 +34,9 @@ import time
 from ..hardware.iqrfid5102_driver import IQRFID5102
 
 # Константы из референса C#
-UHF_CARD_UID_LENGTH = 24  # Обрезка EPC для UHF карт
+# ВНИМАНИЕ: усечение UHF-EPC (ранее UHF_CARD_UID_LENGTH=24) удалено — issue #116.
+# Полный EPC передаётся как есть; нормализация/сопоставление личности — на
+# стороне Biblio (G7, biblio#417).
 DEBOUNCE_MS = 800  # Защита от дребезга
 UID_STRIP_DELIMITERS = True  # Удалять разделители
 UID_UPPER_HEX = True  # Верхний регистр
@@ -50,31 +54,31 @@ class CardReadEvent:
 def normalize_uid(raw_uid: str, is_uhf: bool = False) -> str:
     """
     Нормализация UID карты (алгоритм из C# референса)
-    
+
     Args:
         raw_uid: Исходный UID
-        is_uhf: True если UHF карта (нужна обрезка до 24 символов)
-    
+        is_uhf: True если UHF карта. EPC НЕ усекается (issue #116); параметр
+            сохранён для совместимости вызовов и на случай будущей
+            source-specific логики.
+
     Returns:
-        Нормализованный UID
+        Нормализованный UID (полная длина, без усечения)
     """
     if not raw_uid:
         return ""
-    
+
     uid = raw_uid
-    
+
     # Удаление разделителей: : - пробелы
     if UID_STRIP_DELIMITERS:
         uid = re.sub(r'[:\-\s]', '', uid)
-    
+
     # Верхний регистр
     if UID_UPPER_HEX:
         uid = uid.upper()
-    
-    # Для UHF карт обрезаем EPC до 24 символов
-    if is_uhf and len(uid) > UHF_CARD_UID_LENGTH:
-        uid = uid[:UHF_CARD_UID_LENGTH]
-    
+
+    # UHF-EPC НЕ усекается: усечение до 24 символов схлопывало две карты
+    # с общим 96-битным префиксом в одну личность (issue #116).
     return uid
 
 

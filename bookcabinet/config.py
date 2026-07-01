@@ -97,7 +97,9 @@ RFID = {
     'book_reader_fallback': '/dev/ttyUSB0',
     'card_poll_interval': 0.3,
     'card_debounce_ms': 800,
-    'uhf_card_uid_length': 24,
+    # 'uhf_card_uid_length' удалён (issue #116): усечение UHF-EPC до 24 символов
+    # схлопывало две карты с общим 96-битным префиксом в одну личность.
+    # Полный EPC передаётся как есть; нормализация — на стороне Biblio (G7).
 }
 
 HOST = os.environ.get('HOST', '0.0.0.0')
