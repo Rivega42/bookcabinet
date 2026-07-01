@@ -4,24 +4,30 @@
 from typing import Optional, Dict, List
 from ..database import db
 from ..irbis.service import library_service
-from ..config import IRBIS
+from ..config import IRBIS, MOCK_MODE
+
+# Встроенные тестовые карты (в т.ч. ADMIN99=admin) — ТОЛЬКО для мок-режима.
+# В проде (MOCK_MODE=false) self.test_users пуст, поэтому короткий путь на :25
+# недостижим и авторизация всегда идёт через ИРБИС/БД. См. issue #107.
+_TEST_USERS = {
+    'CARD001': {'rfid': 'CARD001', 'id': '001', 'name': 'Иванов Иван', 'role': 'reader', 'ticket': 'LIB-001'},
+    'CARD002': {'rfid': 'CARD002', 'id': '002', 'name': 'Петрова Мария', 'role': 'reader', 'ticket': 'LIB-002'},
+    'ADMIN01': {'rfid': 'ADMIN01', 'id': 'L01', 'name': 'Сидорова Анна', 'role': 'librarian', 'ticket': 'STAFF-001'},
+    'ADMIN99': {'rfid': 'ADMIN99', 'id': 'A99', 'name': 'Администратор', 'role': 'admin', 'ticket': 'ADMIN-001'},
+}
 
 
 class AuthService:
     def __init__(self):
         self.irbis = library_service
         self.current_user: Optional[Dict] = None
-        
-        self.test_users = {
-            'CARD001': {'rfid': 'CARD001', 'id': '001', 'name': 'Иванов Иван', 'role': 'reader', 'ticket': 'LIB-001'},
-            'CARD002': {'rfid': 'CARD002', 'id': '002', 'name': 'Петрова Мария', 'role': 'reader', 'ticket': 'LIB-002'},
-            'ADMIN01': {'rfid': 'ADMIN01', 'id': 'L01', 'name': 'Сидорова Анна', 'role': 'librarian', 'ticket': 'STAFF-001'},
-            'ADMIN99': {'rfid': 'ADMIN99', 'id': 'A99', 'name': 'Администратор', 'role': 'admin', 'ticket': 'ADMIN-001'},
-        }
-    
+
+        # Тестовые карты активны только в мок-режиме; иначе — пустой словарь.
+        self.test_users = dict(_TEST_USERS) if MOCK_MODE else {}
+
     async def authenticate(self, card_rfid: str) -> Dict:
         """Аутентификация пользователя по RFID карте"""
-        
+
         if card_rfid in self.test_users:
             user = self.test_users[card_rfid]
             self.current_user = user
