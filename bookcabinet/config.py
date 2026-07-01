@@ -100,7 +100,9 @@ RFID = {
     'uhf_card_uid_length': 24,
 }
 
-HOST = os.environ.get('HOST', '0.0.0.0')
+# Дефолт — только loopback: киоск-API не должен слушать наружу по умолчанию
+# (issue #108). Наружное прослушивание задаётся явно через env HOST.
+HOST = os.environ.get('HOST', '127.0.0.1')
 PORT = int(os.environ.get('PORT', '5000'))
 LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
 
