@@ -115,7 +115,9 @@ TELEGRAM = {
 
 IRBIS = {
     'mock': _env_bool('IRBIS_MOCK'),
-    'host': os.environ.get('IRBIS_HOST', '172.29.67.70'),
+    # Хост/креды боевого ИРБИС задаются ТОЛЬКО через env — без запечённых
+    # дефолтов (issue #109). Раньше здесь был боевой IP в открытом виде.
+    'host': os.environ.get('IRBIS_HOST', ''),
     'port': int(os.environ.get('IRBIS_PORT', '6666')),
     'db': os.environ.get('IRBIS_DB', 'IBIS'),
     'books_db': os.environ.get('IRBIS_BOOKS_DB', 'KAT%SERV09%'),
