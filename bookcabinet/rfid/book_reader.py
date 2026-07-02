@@ -111,8 +111,12 @@ class BookReader:
             tags = self._parse_inventory(response)
             self._last_tags = tags
             return tags
+        except OSError:
+            # аппаратный отвал USB-порта (SerialException ⊂ OSError) — пробросить
+            # наверх, чтобы start_polling переоткрыл порт с backoff, а не спамил на SD
+            raise
         except Exception as e:
-            print(f"Inventory error: {e}")
+            print(f"Inventory parse error: {e}")
             return []
     
     def _parse_inventory(self, data: bytes) -> List[str]:
@@ -228,24 +232,54 @@ class BookReader:
             return False
     
     async def start_polling(self, interval: float = 1.0):
-        """Циклическое сканирование меток"""
+        """Циклическое сканирование меток. Устойчиво к отвалу USB-порта: при аппаратной
+        ошибке порт закрывается, логируется ОДИН раз, и переоткрывается с экспоненциальным
+        backoff (не спамим ошибку на SD каждый цикл — RPi3 не тянет питание UHF-ридеров)."""
         self._running = True
         seen_tags = set()
-        
-        while self._running:
-            tags = await self.inventory()
-            
-            for tag in tags:
-                if tag not in seen_tags:
-                    seen_tags.add(tag)
-                    if self.on_tag_read:
-                        self.on_tag_read({'epc': tag})
-            
-            current_set = set(tags)
-            self.current_tags = current_set
-            seen_tags = seen_tags & current_set
+        err_state = False
+        backoff = max(interval, 1.0)
 
-            await asyncio.sleep(interval)
+        while self._running:
+            try:
+                tags = await self.inventory()
+                if err_state:
+                    print("[book_reader] USB-порт восстановлен")
+                    err_state = False
+                    backoff = max(interval, 1.0)
+
+                for tag in tags:
+                    if tag not in seen_tags:
+                        seen_tags.add(tag)
+                        if self.on_tag_read:
+                            self.on_tag_read({'epc': tag})
+
+                current_set = set(tags)
+                self.current_tags = current_set
+                seen_tags = seen_tags & current_set
+
+                await asyncio.sleep(interval)
+            except OSError as e:
+                # аппаратный отвал порта: лог РАЗ, закрыть, backoff, переоткрыть
+                if not err_state:
+                    print(f"[book_reader] USB-порт отвалился ({e}) — reconnect с backoff, логи заглушены")
+                    err_state = True
+                try:
+                    self.disconnect()
+                except Exception:
+                    pass
+                self.current_tags = set()
+                await asyncio.sleep(min(backoff, 30.0))
+                backoff = min(backoff * 2, 30.0)
+                try:
+                    await self.connect()
+                except Exception:
+                    pass
+            except Exception as e:
+                # прочее (парсинг и т.п.) — не роняем цикл, короткая пауза
+                if not err_state:
+                    print(f"[book_reader] ошибка опроса: {e}")
+                await asyncio.sleep(interval)
 
     def stop_polling(self):
         self._running = False

@@ -302,23 +302,38 @@ class UnifiedCardReader:
         print("[NFC] Цикл опроса остановлен")
     
     async def _poll_uhf_loop(self, interval: float):
-        """Цикл опроса UHF считывателя"""
+        """Цикл опроса UHF считывателя. Устойчив к отвалу USB: при ошибке — лог ОДИН раз,
+        экспоненциальный backoff и попытка reconnect (RPi3 не тянет питание UHF → без этого
+        каждый цикл спамил ошибку на SD-карту)."""
         print("[UHF] Цикл опроса запущен")
-        
+        err_state = False
+        backoff = max(interval, 1.0)
+
         while self._running:
             try:
-                # Используем inventory() из драйвера
                 tags = self._uhf_reader.inventory(rounds=1)
-                
+                if err_state:
+                    print("[UHF] считыватель восстановлен")
+                    err_state = False
+                    backoff = max(interval, 1.0)
+
                 for epc in tags:
                     self._handle_card(epc, 'uhf')
-                    
+
+                await asyncio.sleep(interval)
             except Exception as e:
-                if self._running:
-                    print(f"[UHF] Ошибка чтения: {e}")
-            
-            await asyncio.sleep(interval)
-        
+                if self._running and not err_state:
+                    print(f"[UHF] считыватель отвалился ({e}) — reconnect с backoff, логи заглушены")
+                    err_state = True
+                try:
+                    reconnect = getattr(self._uhf_reader, 'connect', None) or getattr(self._uhf_reader, 'reconnect', None)
+                    if reconnect:
+                        reconnect()
+                except Exception:
+                    pass
+                await asyncio.sleep(min(backoff, 30.0))
+                backoff = min(backoff * 2, 30.0)
+
         print("[UHF] Цикл опроса остановлен")
     
     def _read_nfc_card_from_reader(self, reader) -> Optional[str]:
