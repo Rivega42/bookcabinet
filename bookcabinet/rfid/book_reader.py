@@ -8,6 +8,7 @@ IQRFID-5102 UHF Book Reader (Serial)
 - TagData: [Count][EPC_Len][PC(2)][EPC(12)][RSSI]
 """
 import asyncio
+import time
 from typing import Optional, List, Callable, Dict
 from ..config import MOCK_MODE, RFID
 
@@ -102,12 +103,17 @@ class BookReader:
         
         try:
             cmd = self._build_command(CMD_INVENTORY)
-            
-            self.serial.reset_input_buffer()
-            self.serial.write(cmd)
-            await asyncio.sleep(0.15)
-            
-            response = self.serial.read(512)
+
+            def _io():
+                # блокирующий serial (HIGH-8): write + пауза + read целиком в отдельном
+                # потоке, чтобы не морозить event-loop aiohttp на одноядерном RPi3
+                self.serial.reset_input_buffer()
+                self.serial.write(cmd)
+                time.sleep(0.15)
+                return self.serial.read(512)
+
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(None, _io)
             tags = self._parse_inventory(response)
             self._last_tags = tags
             return tags
