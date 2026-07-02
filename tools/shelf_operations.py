@@ -233,9 +233,9 @@ def return_rear():
     print("=== RETURN REAR SHELF ===")
     setup()
     
-    print("Step 1: Tray -> 12600 steps to BACK (front handoff)")
-    tray_move(LOCK_DISTANCE, 1)
-    
+    print("Step 1: Tray -> BACK endstop (было слепое tray_move → проскок концевика в механику)")
+    tray_to_endstop(ENDSTOP_BACK)
+
     print("Step 2: Front lock -> RELEASE")
     lock_release(LOCK_FRONT)
     
@@ -293,9 +293,9 @@ def return_front():
     print("=== RETURN FRONT SHELF ===")
     setup()
     
-    print("Step 1: Tray -> 12600 steps to FRONT (rear handoff at 18300)")
-    tray_move(LOCK_DISTANCE, 0)
-    
+    print("Step 1: Tray -> FRONT endstop (было слепое tray_move → проскок концевика в механику)")
+    tray_to_endstop(ENDSTOP_FRONT)
+
     print("Step 2: Rear lock -> RELEASE")
     lock_release(LOCK_REAR)
     

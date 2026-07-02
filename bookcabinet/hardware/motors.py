@@ -570,7 +570,7 @@ class Motors:
             grab_lock, end_sensor, end_dir, center_dir = L_REAR, BACK, 1, 0
         else:
             return False
-        steps = ["Лоток LOCK_DISTANCE", "Отпуск держащего замка",
+        steps = ["Лоток к концевику ряда", "Отпуск держащего замка",
                  "Перехват: лоток LOCK_DISTANCE", "Захват замком ряда",
                  "Лоток к концевику стойки", "Укладка: отпуск замка (strong)", "Лоток в CENTER"]
         if self.mock_mode or not self.pi:
@@ -581,7 +581,8 @@ class Motors:
         self._tray_setup_pins()
         try:
             await self._hf_progress(on_progress, step_base + 1, total, steps[0])
-            self._tray_move_steps(m1_dir, LD, self._HF_FREQ)
+            if not await self._tray_to_endstop(end_dir, end_sensor):  # ФИКС: было слепое tray_move → проскок концевика
+                return False
             await self._hf_progress(on_progress, step_base + 2, total, steps[1])
             self._tray_lock(rel_lock, self._HF_RELEASE_PWM)
             await self._hf_progress(on_progress, step_base + 3, total, steps[2])

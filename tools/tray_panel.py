@@ -249,7 +249,7 @@ def return_front():
     """Уложить полку (держит ЗАДНИЙ замок) в ПЕРЕДНИЙ ряд. Порт shelf_operations return_front.
     Родная функция пульта → читает глобальные TRAY_FREQ и PWM (модификаторы действуют)."""
     log("=== return_front (уложить в ПЕРЕДНИЙ ряд) ===")
-    tray_move(LOCK_DISTANCE, 0)
+    tray_to_endstop(ENDSTOP_FRONT)   # было слепое tray_move → проскок концевика в механику
     lock_release(LOCK_REAR)
     tray_move(LOCK_DISTANCE, 1)
     lock_grab(LOCK_FRONT)
@@ -264,7 +264,7 @@ def return_rear():
     """Уложить полку (держит ПЕРЕДНИЙ замок) в ЗАДНИЙ ряд. Порт shelf_operations return_rear.
     Родная функция пульта → читает глобальные TRAY_FREQ и PWM (модификаторы действуют)."""
     log("=== return_rear (уложить в ЗАДНИЙ ряд) ===")
-    tray_move(LOCK_DISTANCE, 1)
+    tray_to_endstop(ENDSTOP_BACK)   # было слепое tray_move → проскок концевика в механику
     lock_release(LOCK_FRONT)
     tray_move(LOCK_DISTANCE, 0)
     lock_grab(LOCK_REAR)
@@ -368,8 +368,8 @@ def ftr_finish():
 def place_front_approach():
     """Положить в ПЕРЕДНИЙ ряд, этап 1: довести полку к переду (return_front шаги 1-4),
     БЕЗ авто-концевика. Дальше Роман джогом −N (к FRONT) доводит до FRONT концевика."""
-    log("=== положить ПЕРЁД этап 1 (подвод, без авто-концевика) ===")
-    tray_move(LOCK_DISTANCE, 0)   # 12600 FRONT
+    log("=== положить ПЕРЁД этап 1 (подвод по концевику) ===")
+    tray_to_endstop(ENDSTOP_FRONT)   # ФИКС: было слепое tray_move → проскок концевика
     lock_release(LOCK_REAR)
     tray_move(LOCK_DISTANCE, 1)   # 12600 BACK
     lock_grab(LOCK_FRONT)
@@ -388,8 +388,8 @@ def place_front_seat():
 def place_rear_approach():
     """Положить в ЗАДНИЙ ряд, этап 1: довести полку к заду (return_rear шаги 1-4),
     БЕЗ авто-концевика. Дальше джогом +N (к BACK) до BACK концевика."""
-    log("=== положить ЗАД этап 1 (подвод, без авто-концевика) ===")
-    tray_move(LOCK_DISTANCE, 1)   # 12600 BACK
+    log("=== положить ЗАД этап 1 (подвод по концевику) ===")
+    tray_to_endstop(ENDSTOP_BACK)   # ФИКС: было слепое tray_move → проскок концевика
     lock_release(LOCK_FRONT)
     tray_move(LOCK_DISTANCE, 0)   # 12600 FRONT
     lock_grab(LOCK_REAR)
