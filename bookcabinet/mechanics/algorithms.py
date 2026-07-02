@@ -288,6 +288,17 @@ class Algorithms:
         
         return True
     
+    def _chk(self, ok, what: str):
+        """CRIT-2: строгая проверка результата мех-шага — БД не должна врать про
+        issued/extracted при физически несостоявшемся цикле. При ok is False бросаем
+        RuntimeError (ловится except → state=error → business видит False → не комми́тит).
+        Фолбэк «мало ли»: MECH_STRICT=false → старое снисходительное поведение."""
+        import os
+        strict = os.environ.get('MECH_STRICT', 'true').lower() in ('1', 'true', 'yes', 'on')
+        if strict and ok is False:
+            raise RuntimeError(f"мех-шаг не удался: {what}")
+        return ok
+
     async def _safe_tray_extend(self, steps: int = None) -> bool:
         """Безопасное выдвижение лотка с проверкой датчиков"""
         if self._stop_requested:
@@ -424,37 +435,37 @@ class Algorithms:
             })
             
             await self._emit_progress(3, total_steps, 'Выдвижение лотка (1-й этап)')
-            await self._safe_tray_extend(grab_params.get('extend1', 1500))
-            
+            self._chk(await self._safe_tray_extend(grab_params.get('extend1', 1500)), 'выдвижение лотка 1')
+
             lock = 'lock1' if row == 'FRONT' else 'lock2'
             await self._emit_progress(4, total_steps, 'Захват полки (закрытие замка)')
-            await servos.close_lock(lock)
-            
+            self._chk(await servos.close_lock(lock), 'захват замком')
+
             await self._emit_progress(5, total_steps, 'Втягивание лотка')
-            await self._safe_tray_retract(grab_params.get('retract', 1500))
-            
+            self._chk(await self._safe_tray_retract(grab_params.get('retract', 1500)), 'втягивание лотка')
+
             await self._emit_progress(6, total_steps, 'Освобождение защёлки (открытие замка)')
-            await servos.open_lock(lock)
-            
+            self._chk(await servos.open_lock(lock), 'открытие замка')
+
             await self._emit_progress(7, total_steps, 'Выдвижение лотка (2-й этап)')
-            await self._safe_tray_extend(grab_params.get('extend2', 3000))
-            
+            self._chk(await self._safe_tray_extend(grab_params.get('extend2', 3000)), 'выдвижение лотка 2')
+
             await self._emit_progress(8, total_steps, 'Фиксация полки')
-            await servos.close_lock(lock)
-            
+            self._chk(await servos.close_lock(lock), 'фиксация замком')
+
             await self._emit_progress(9, total_steps, 'Полное втягивание')
-            await self._safe_tray_retract()
-            
+            self._chk(await self._safe_tray_retract(), 'полное втягивание')
+
             window_x, window_y = self.path_planner.get_window_position()
             await self._emit_progress(10, total_steps, 'Перемещение к окну выдачи')
             if not await self._safe_move_xy(window_x, window_y):
                 return False
-            
+
             await self._emit_progress(11, total_steps, 'Открытие внутренней шторки')
             await shutters.open_shutter('inner')
-            
+
             await self._emit_progress(12, total_steps, 'Выдвижение в окно')
-            await self._safe_tray_extend()
+            self._chk(await self._safe_tray_extend(), 'выдвижение в окно')
             
             await self._emit_progress(13, total_steps, 'Открытие внешней шторки')
             await shutters.open_shutter('outer')
@@ -494,26 +505,26 @@ class Algorithms:
             })
             
             await self._emit_progress(5, total_steps, 'Выдвижение лотка (вставка)')
-            await self._safe_tray_extend(grab_params.get('extend2', 3000))
-            
+            self._chk(await self._safe_tray_extend(grab_params.get('extend2', 3000)), 'выдвижение лотка (вставка)')
+
             lock = 'lock1' if row == 'FRONT' else 'lock2'
             await self._emit_progress(6, total_steps, 'Освобождение полки (открытие замка)')
-            await servos.open_lock(lock)
-            
+            self._chk(await servos.open_lock(lock), 'освобождение замка')
+
             await self._emit_progress(7, total_steps, 'Частичное втягивание')
-            await self._safe_tray_retract(grab_params.get('retract', 1500))
-            
+            self._chk(await self._safe_tray_retract(grab_params.get('retract', 1500)), 'частичное втягивание')
+
             await self._emit_progress(8, total_steps, 'Фиксация защёлки (закрытие замка)')
-            await servos.close_lock(lock)
-            
+            self._chk(await servos.close_lock(lock), 'фиксация замком')
+
             await self._emit_progress(9, total_steps, 'Выдвижение для освобождения')
-            await self._safe_tray_extend(grab_params.get('extend1', 1500))
-            
+            self._chk(await self._safe_tray_extend(grab_params.get('extend1', 1500)), 'выдвижение для освобождения')
+
             await self._emit_progress(10, total_steps, 'Открытие замка')
-            await servos.open_lock(lock)
-            
+            self._chk(await servos.open_lock(lock), 'открытие замка')
+
             await self._emit_progress(11, total_steps, 'Полное втягивание')
-            await self._safe_tray_retract()
+            self._chk(await self._safe_tray_retract(), 'полное втягивание')
             
             await self._emit_progress(12, total_steps, 'Операция завершена')
             
@@ -532,9 +543,9 @@ class Algorithms:
         BACK  — КРОСС-РЯД: перехват полки на платформу (motors.cross_grab_onto_platform,
                 задний ряд → передний замок держит) → каретка к окну → выдвинуть в окно.
 
-        ⚠️ Кросс-рядная ветка (BACK) — НОВАЯ композиция валидированных кусков
-        (перехват + существующая доставка к окну). Валидировать на железе пошагово
-        рядом с tools/cross_operations_v2.py. Живой issue-флоу её пока НЕ зовёт
+        ⚠️ Кросс-рядная ветка (BACK) — композиция валидированного extract_rear
+        (shelf_operations.py, 2 перехвата) + существующая доставка к окну.
+        Валидировать на железе пошагово. Живой issue-флоу её пока НЕ зовёт
         (issue_service использует take_shelf) — включаем после сухого прогона.
         Обратный путь (stow задней книги: фронт-held → задняя стойка) асимметричен —
         проектируется на железе (см. docs/PEREHVAT.md).

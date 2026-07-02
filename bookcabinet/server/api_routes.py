@@ -45,7 +45,9 @@ async def _alert(message: str, component: str = 'operations'):
 
 # Один механизм — одна операция: повторный клик «выдать» не должен
 # запускать второй механический цикл параллельно первому.
-_mech_lock = asyncio.Lock()
+# Лок общий с WS-обработчиком (server/mech_lock.py), чтобы WS-управление механикой
+# и /api/init,/api/move не шли мимо (гонка двух драйверов портала).
+from .mech_lock import mech_lock as _mech_lock
 
 
 def with_mech_lock(handler):
@@ -1705,7 +1707,7 @@ def setup_routes(app: web.Application):
     app.router.add_get('/api/auth/current', get_auth_current)
     app.router.add_post('/api/emergency-stop', post_emergency_stop)
     app.router.add_post('/api/shutter/close-all', post_shutter_close_all)
-    app.router.add_post('/api/maintenance', post_maintenance)
+    app.router.add_post('/api/maintenance', with_mech_lock(post_maintenance))
     app.router.add_post('/api/test/tray', post_test_tray)
     app.router.add_post('/api/test/servo', post_test_servo)
     app.router.add_post('/api/calibration/test-suite', post_calibration_test_suite)
@@ -1729,10 +1731,10 @@ def setup_routes(app: web.Application):
     app.router.add_post('/api/extract-all', with_mech_lock(post_extract_all))
     app.router.add_post('/api/run-inventory', with_mech_lock(post_inventory))
     
-    # Mechanics
-    app.router.add_post('/api/init', post_init)
+    # Mechanics — init/move под mech-локом (HIGH-6); stop НЕ лочим (аварийный, должен работать в занятости)
+    app.router.add_post('/api/init', with_mech_lock(post_init))
     app.router.add_post('/api/stop', post_stop)
-    app.router.add_post('/api/move', post_move)
+    app.router.add_post('/api/move', with_mech_lock(post_move))
     
     # Calibration
     app.router.add_get('/api/calibration', get_calibration)

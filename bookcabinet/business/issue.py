@@ -1,8 +1,16 @@
 """
 Выдача книги — state machine с восстановлением при сбое.
 
-Цепочка выдачи:
+Legacy-цепочка (BIBLIO_MODE=irbis, по умолчанию — текущее поведение):
   VALIDATE → TAKE_SHELF → WAIT_USER → GIVE_SHELF → UPDATE_DB → CALL_IRBIS → DONE
+
+BDP-сага (BIBLIO_MODE=bdp, мастер-контракт #121 C9):
+  VALIDATE → RESERVE (card→item→reserve: ГЕЙТ Biblio ДО механики; DENY → механику
+  не трогать) → TAKE_SHELF → WAIT_USER → GIVE_SHELF →
+    mech ok  → UPDATE_DB → COMMIT (сеть упала → очередь bdp_issue с тем же op_id)
+    mech fail→ ROLLBACK (компенсация; сеть упала → очередь bdp_rollback)
+  Офлайн-reserve (сеть недоступна на гейте): локальная валидация из VALIDATE
+  (не-должник по кэшу, не issued, не reserved другим) → механика → очередь.
 
 При сбое на любом этапе:
   - Состояние сохраняется в state
@@ -17,16 +25,20 @@ from enum import Enum
 from ..database import db
 from ..mechanics.algorithms import algorithms
 from ..irbis.service import library_service
+from ..config import BIBLIO
 
 
 class IssueState(str, Enum):
     IDLE = 'idle'
     VALIDATE = 'validate'
+    RESERVE = 'reserve'
     TAKE_SHELF = 'take_shelf'
     WAIT_USER = 'wait_user'
     GIVE_SHELF = 'give_shelf'
     UPDATE_DB = 'update_db'
     CALL_IRBIS = 'call_irbis'
+    COMMIT = 'commit'
+    ROLLBACK = 'rollback'
     DONE = 'done'
     ERROR = 'error'
     RECOVERING = 'recovering'
@@ -49,6 +61,21 @@ class IssueService:
             'user_rfid': self.current_user_rfid,
             'error': self.error_message,
         }
+
+    async def _bdp_rollback(self, op_id: str):
+        """Компенсация саги при сбое механики (#121): rollback брони.
+        Сеть упала → rollback доедет очередью (тот же op_id)."""
+        self.state = IssueState.ROLLBACK
+        from ..biblio.bdp_client import get_bdp_client, BdpDeny, BdpError
+        try:
+            await get_bdp_client().rollback(op_id)
+        except BdpError as e:
+            db.add_system_log('WARNING', f"Biblio rollback недоступен: {e} — в очередь", 'issue')
+            from ..irbis.sync_queue import sync_queue
+            sync_queue.add('bdp_rollback', {}, op_id=op_id)
+        except BdpDeny as e:
+            db.add_system_log('ERROR',
+                f"Biblio rollback отказ ({e.code}): {e.message} — сверить {op_id}", 'issue')
 
     async def _safe_recover(self):
         """Безопасное восстановление при сбое — втянуть лоток, закрыть шторки"""
@@ -97,10 +124,41 @@ class IssueService:
             if on_progress:
                 algorithms.set_callbacks(progress=on_progress)
 
+            # === RESERVE (только BDP): гейт Biblio ДО механики (#121 §3.1) ===
+            bdp_mode = BIBLIO['mode'] == 'bdp'
+            op_id = None
+            bdp_online = False   # reserve прошёл онлайн → нужен commit/rollback
+            bdp_item = None      # инв.№ (910^b) после резолва EPC
+            if bdp_mode:
+                self.state = IssueState.RESERVE
+                from ..biblio.bdp_client import get_bdp_client, new_op_id, BdpDeny, BdpError
+                bdp = get_bdp_client()
+                op_id = new_op_id()   # рождается ДО reserve, живёт до commit/rollback и в очереди
+                try:
+                    # card-сессия single-use: тап карты на каждую транзакцию
+                    await bdp.card(user_rfid)
+                    item_info = await bdp.item(book_rfid)
+                    if not item_info.get('found', True):
+                        return {'success': False,
+                                'error': 'Метка книги не опознана в каталоге — обратитесь к сотруднику'}
+                    bdp_item = item_info.get('item')
+                    await bdp.reserve(bdp_item, op_id)
+                    bdp_online = True
+                except BdpDeny as e:
+                    # Бизнес-отказ гейта (нет права/недоступен/бронь другого) — механику НЕ трогать
+                    return {'success': False, 'error': f'Отказ Biblio: {e.message or e.code}'}
+                except BdpError as e:
+                    # Сеть недоступна → офлайн-деградация (#121 §4): локальная валидация
+                    # уже прошла в VALIDATE (не issued, не reserved другим) → механика →
+                    # операция доедет очередью с ТЕМ ЖЕ op_id
+                    db.add_system_log('WARNING', f"Biblio недоступен ({e}) — офлайн-выдача", 'issue')
+
             # === TAKE_SHELF ===
             self.state = IssueState.TAKE_SHELF
             success = await algorithms.take_shelf(cell['row'], cell['x'], cell['y'])
             if not success:
+                if bdp_online:
+                    await self._bdp_rollback(op_id)
                 await self._safe_recover()
                 self.state = IssueState.ERROR
                 self.error_message = 'Ошибка механики: не удалось извлечь полку'
@@ -115,13 +173,15 @@ class IssueService:
             self.state = IssueState.GIVE_SHELF
             give_ok = await algorithms.give_shelf(cell['row'], cell['x'], cell['y'])
             if not give_ok:
+                if bdp_online:
+                    await self._bdp_rollback(op_id)
                 await self._safe_recover()
                 self.state = IssueState.ERROR
                 self.error_message = 'Ошибка механики: не удалось вернуть полку'
                 # БД НЕ обновляем — книга физически не выдана
                 return {'success': False, 'error': self.error_message}
 
-            # === UPDATE_DB ===
+            # === UPDATE_DB === (локальная SQLite — источник правды о физике в обоих режимах)
             self.state = IssueState.UPDATE_DB
             # Атомарно: книга → issued + журнал операции (db v2)
             duration = int((datetime.now() - start_time).total_seconds() * 1000)
@@ -129,18 +189,41 @@ class IssueService:
                 cell={**cell, 'book_rfid': book_rfid},
                 duration_ms=duration)
 
-            # === CALL_IRBIS ===
-            self.state = IssueState.CALL_IRBIS
-            try:
-                irbis_success, irbis_msg = await self.irbis.issue_book(book_rfid, user_rfid)
-                if not irbis_success:
-                    db.add_system_log('WARNING', f"ИРБИС: {irbis_msg}", 'issue')
+            if bdp_mode:
+                # === COMMIT (BDP): механика прошла → закрыть сагу ===
+                self.state = IssueState.COMMIT
+                from ..biblio.bdp_client import BdpDeny, BdpError
+                from ..irbis.sync_queue import sync_queue
+                if bdp_online:
+                    try:
+                        await bdp.commit(op_id)
+                    except BdpError as e:
+                        # reserve уже в Biblio; реплей reserve(op_id)→commit идемпотентен
+                        db.add_system_log('WARNING', f"Biblio commit недоступен: {e} — в очередь", 'issue')
+                        sync_queue.add('bdp_issue',
+                            {'item': bdp_item, 'epc': book_rfid, 'patron_uid': user_rfid},
+                            op_id=op_id)
+                    except BdpDeny as e:
+                        db.add_system_log('ERROR',
+                            f"Biblio commit отказ ({e.code}): {e.message} — сверить {op_id}", 'issue')
+                else:
+                    # офлайн-выдача целиком: сага доедет очередью (reserve+commit, тот же op_id)
+                    sync_queue.add('bdp_issue',
+                        {'item': bdp_item, 'epc': book_rfid, 'patron_uid': user_rfid},
+                        op_id=op_id)
+            else:
+                # === CALL_IRBIS (legacy) ===
+                self.state = IssueState.CALL_IRBIS
+                try:
+                    irbis_success, irbis_msg = await self.irbis.issue_book(book_rfid, user_rfid)
+                    if not irbis_success:
+                        db.add_system_log('WARNING', f"ИРБИС: {irbis_msg}", 'issue')
+                        from ..irbis.sync_queue import sync_queue
+                        sync_queue.add('issue', {'book_rfid': book_rfid, 'user_rfid': user_rfid})
+                except Exception as e:
+                    db.add_system_log('WARNING', f"ИРБИС недоступен: {e}. Книга выдана локально.", 'issue')
                     from ..irbis.sync_queue import sync_queue
                     sync_queue.add('issue', {'book_rfid': book_rfid, 'user_rfid': user_rfid})
-            except Exception as e:
-                db.add_system_log('WARNING', f"ИРБИС недоступен: {e}. Книга выдана локально.", 'issue')
-                from ..irbis.sync_queue import sync_queue
-                sync_queue.add('issue', {'book_rfid': book_rfid, 'user_rfid': user_rfid})
 
             # === DONE ===
             self.state = IssueState.DONE

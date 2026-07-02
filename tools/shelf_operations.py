@@ -51,6 +51,12 @@ CROSS_REAR_TO_FRONT_STEP6 = 12600  # rear_to_front: шаг 6 к BACK
 LOCK_GRAB_PWM = 1200
 LOCK_RELEASE_PWM = 500
 
+# Необязательное переопределение из окружения (пульт tray_panel передаёт модификаторы
+# скорости/PWM). Без env — поведение как было (валидированные значения). Additive, безопасно.
+TRAY_FREQ = int(os.environ.get("TRAY_FREQ", TRAY_FREQ))
+LOCK_GRAB_PWM = int(os.environ.get("LOCK_GRAB_PWM", LOCK_GRAB_PWM))
+LOCK_RELEASE_PWM = int(os.environ.get("LOCK_RELEASE_PWM", LOCK_RELEASE_PWM))
+
 # === ИНИЦИАЛИЗАЦИЯ ===
 pi = pigpio.pi()
 
@@ -227,9 +233,9 @@ def return_rear():
     print("=== RETURN REAR SHELF ===")
     setup()
     
-    print("Step 1: Tray -> 12600 steps to BACK (front handoff)")
-    tray_move(LOCK_DISTANCE, 1)
-    
+    print("Step 1: Tray -> BACK endstop (было слепое tray_move → проскок концевика в механику)")
+    tray_to_endstop(ENDSTOP_BACK)
+
     print("Step 2: Front lock -> RELEASE")
     lock_release(LOCK_FRONT)
     
@@ -287,9 +293,9 @@ def return_front():
     print("=== RETURN FRONT SHELF ===")
     setup()
     
-    print("Step 1: Tray -> 12600 steps to FRONT (rear handoff at 18300)")
-    tray_move(LOCK_DISTANCE, 0)
-    
+    print("Step 1: Tray -> FRONT endstop (было слепое tray_move → проскок концевика в механику)")
+    tray_to_endstop(ENDSTOP_FRONT)
+
     print("Step 2: Rear lock -> RELEASE")
     lock_release(LOCK_REAR)
     

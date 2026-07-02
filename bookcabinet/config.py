@@ -130,3 +130,24 @@ IRBIS = {
     'username': os.environ.get('IRBIS_USERNAME', ''),
     'password': os.environ.get('IRBIS_PASSWORD', ''),
 }
+
+
+def _read_secret_file(path: str) -> str:
+    """Токен из файла-секрета (0600, вне репо) — по контракту BDP (#121 §6)."""
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.read().strip()
+    except Exception:
+        return ''
+
+
+# Biblio / BDP (мастер-контракт #121). mode='irbis' — legacy-путь (текущее поведение,
+# по умолчанию, НЕ ломаем); mode='bdp' — сага reserve→механика→commit|rollback.
+BIBLIO = {
+    'mode': os.environ.get('BIBLIO_MODE', 'irbis').strip().lower(),
+    'url': os.environ.get('BIBLIO_URL', 'http://127.0.0.1:8080'),
+    # device-token: env приоритетнее файла-секрета; в репо не хранить (#121 §6)
+    'token': os.environ.get('BIBLIO_TOKEN', '') or _read_secret_file(
+        os.environ.get('BIBLIO_TOKEN_FILE', '/etc/bookcabinet/biblio_token')),
+    'timeout': float(os.environ.get('BIBLIO_TIMEOUT', '10')),
+}
