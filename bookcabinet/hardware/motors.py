@@ -12,6 +12,7 @@ class Motors:
     def __init__(self):
         self.position = {"x": 0, "y": 0, "tray": 0}
         self.is_moving = False
+        self.position_trusted = True   # False после таймаута движения → требуется хоминг (Волна 2)
         self.mock_mode = MOCK_MODE
         self.pi = None
         # Центр лотка в шагах: измеряется home_tray_with_sensor при калибровке.
@@ -70,6 +71,20 @@ class Motors:
         self._step_count_a = 0
         self._step_count_b = 0
     
+    def _wait_tx(self, timeout_s: float) -> bool:
+        """Ждать конца передачи волны с ДЕДЛАЙНОМ (железное правило: таймаут на движении).
+        При переборе — wave_tx_stop и False, чтобы не висеть вечно на заклинившем моторе."""
+        t0 = time.time()
+        while self.pi.wave_tx_busy():
+            if time.time() - t0 > timeout_s:
+                try:
+                    self.pi.wave_tx_stop()
+                except Exception:
+                    pass
+                return False
+            time.sleep(0.005)
+        return True
+
     def _wave_steps(self, step_pins: list, steps: int, frequency: int = 4000) -> bool:
         """Execute steps using hardware waves (DMA) for smooth operation"""
         if self.mock_mode or not self.pi:
@@ -105,10 +120,10 @@ class Motors:
         if repeats > 0:
             chain = [255, 0, wave_id, 255, 1, repeats & 0xFF, (repeats >> 8) & 0xFF]
             self.pi.wave_chain(chain)
-            
-            while self.pi.wave_tx_busy():
-                time.sleep(0.01)
-        
+            if not self._wait_tx((repeats * chunk_size) / max(1, frequency) * 2 + 1.0):
+                self.pi.wave_delete(wave_id)
+                return False   # таймаут движения — не врём об успехе
+
         self.pi.wave_delete(wave_id)
         
         # Handle remainder
@@ -123,10 +138,11 @@ class Motors:
             
             if wave_id >= 0:
                 self.pi.wave_send_once(wave_id)
-                while self.pi.wave_tx_busy():
-                    time.sleep(0.01)
+                if not self._wait_tx(remainder / max(1, frequency) * 2 + 0.5):
+                    self.pi.wave_delete(wave_id)
+                    return False
                 self.pi.wave_delete(wave_id)
-        
+
         return True
     
     async def move_xy(self, target_x: int, target_y: int) -> bool:
@@ -163,8 +179,10 @@ class Motors:
                     if abs(steps_b) > 0:
                         step_pins.append(GPIO_PINS["MOTOR_B_STEP"])
                     
-                    self._wave_steps(step_pins, max_steps, MOTOR_SPEEDS["xy"])
-            
+                    if not self._wave_steps(step_pins, max_steps, MOTOR_SPEEDS["xy"]):
+                        self.position_trusted = False   # позиция неизвестна → нужен хоминг
+                        return False   # таймаут движения — позицию НЕ обновляем, успех НЕ рапортуем
+
             self.position["x"] = target_x
             self.position["y"] = target_y
             return True
@@ -187,8 +205,9 @@ class Motors:
             else:
                 self.pi.write(GPIO_PINS["TRAY_DIR"], 1 if is_extend else 0)
                 time.sleep(0.01)
-                self._wave_steps([GPIO_PINS["TRAY_STEP"]], steps, MOTOR_SPEEDS["tray"])
-            
+                if not self._wave_steps([GPIO_PINS["TRAY_STEP"]], steps, MOTOR_SPEEDS["tray"]):
+                    return False   # таймаут движения лотка — успех НЕ рапортуем
+
             self.position["tray"] = 1 if is_extend else 0
             return True
             
