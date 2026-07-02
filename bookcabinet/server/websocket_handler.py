@@ -6,6 +6,8 @@ import asyncio
 from typing import Set, Dict, Any
 from aiohttp import web, WSMsgType
 
+from .mech_lock import mech_lock
+
 
 class WebSocketHandler:
     def __init__(self):
@@ -47,10 +49,27 @@ class WebSocketHandler:
         return ws
     
     async def _handle_message(self, ws: web.WebSocketResponse, data: str):
+        _acquired = False
         try:
             message = json.loads(data)
             action = message.get('action')
-            
+
+            # HIGH-6: механическое ДВИЖЕНИЕ через WS — под общим mech-локом (тем же, что
+            # HTTP-операции), иначе два драйвера портала. stop/get_position/get_sensors/ping/
+            # authenticate/simulate — без лока (чтение и аварийный стоп должны работать в занятости).
+            _needs_lock = (
+                (action == 'motor' and message.get('command') in
+                    ('move_xy', 'move_relative', 'extend_tray', 'retract_tray', 'home'))
+                or action in ('servo', 'shutter')
+            )
+            if _needs_lock:
+                if mech_lock.locked():
+                    await ws.send_json({'type': 'error', 'busy': True,
+                        'message': 'Шкаф занят: выполняется другая операция'})
+                    return
+                await mech_lock.acquire()
+                _acquired = True
+
             if action == 'ping':
                 await ws.send_json({'type': 'pong'})
             
@@ -184,7 +203,10 @@ class WebSocketHandler:
             await ws.send_json({'type': 'error', 'message': 'Invalid JSON'})
         except Exception as e:
             await ws.send_json({'type': 'error', 'message': str(e)})
-    
+        finally:
+            if _acquired:
+                mech_lock.release()
+
     async def broadcast(self, message: Dict[str, Any]):
         # Внутренние подписчики (SSE-диагностика) — best-effort, не блокируем поток
         for q in list(self.subscribers):
